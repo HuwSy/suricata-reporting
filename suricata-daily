@@ -59,11 +59,16 @@ while read -r domain ip; do
 done < <(
     awk '
         /Response TX/ {
-            n = split($0, a, "\
+            # split on literal " [**] "
+            n = split($0, a, " \
 
 \[\\*\\*\\]
 
-");
+ ");
+
+            # a[2] = domain
+            # a[3] = rrtype
+            # a[5] = answer
 
             domain = a[2];
             rr     = a[3];
