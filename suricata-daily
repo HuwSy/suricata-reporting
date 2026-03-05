@@ -144,16 +144,37 @@ while IFS= read -r line; do
 
 done <<< "$REPORT"
 
+# -----------------------------
+# 6) Build DOMAINS list only for domains that have IPs in fast.log
+# -----------------------------
 DOMAINS=""
+
+# build set of IPs seen in fast.log (from REPORT, which already had allowed IPs removed)
+FAST_IPS=$(printf "%s\n" "$REPORT" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u || true)
+
 for domain in "${!NON_ALLOWED_MAP[@]}"; do
-    DOMAINS+="Domain: $domain
+    # normalize domain IPs into one-per-line
+    domain_ips=$(printf "%s" "${NON_ALLOWED_MAP[$domain]}" | tr ' ' '\n' | sed '/^$/d' | sort -u || true)
+
+    # check for intersection with FAST_IPS
+    match_found=false
+    for ip in $domain_ips; do
+        if printf "%s\n" "$FAST_IPS" | grep -Fxq "$ip"; then
+            match_found=true
+            break
+        fi
+    done
+
+    if $match_found; then
+        DOMAINS+="Domain: $domain
 Resolved/seen IPs: ${NON_ALLOWED_MAP[$domain]}
 
 "
+    fi
 done
 
 # -----------------------------
-# 6) Build counted signature summary
+# 7) Build counted signature summary
 # -----------------------------
 SIG_SUMMARY=$(
     printf "%s\n" "$ANNOTATED_REPORT" \
@@ -223,4 +244,4 @@ $ANNOTATED_REPORT
 "
 fi
 
-echo $EMAIL
+echo "$EMAIL"
