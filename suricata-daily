@@ -60,11 +60,7 @@ done < <(
     awk '
         /Response TX/ {
             # split on literal " [**] "
-            n = split($0, a, " \
-
-\[\\*\\*\\]
-
- ");
+            n = split($0, a, " [**] ");
 
             # a[2] = domain
             # a[3] = rrtype
