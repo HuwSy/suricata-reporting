@@ -1,0 +1,226 @@
+#!/bin/bash
+
+ALLOWED_DOMAINS="/etc/suricata/allowed_domains.list"
+FAST_LOG="/var/log/suricata/fast.log"
+EVE_LOG="/var/log/suricata/eve.json"
+HOST_IP=$(hostname -I | awk '{print $1}')
+
+# -----------------------------
+# Load allowed domains
+# -----------------------------
+mapfile -t ALLOWED < "$ALLOWED_DOMAINS"
+
+# Hash: domain → "ip1 ip2 ip3"
+declare -A NON_ALLOWED_MAP
+
+# Temp list of allowed IPs
+ALLOWED_IPS=""
+
+is_ipv4() {
+    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+
+domain_is_allowed() {
+    local domain="$1"
+    for a in "${ALLOWED[@]}"; do
+        # exact match or subdomain match: *.allowed
+        if [[ "$domain" == "$a" || "$domain" == *".$a" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_valid_domain() {
+    # Must contain at least one dot, no spaces, no leading/trailing dots
+    # TLD must be alphabetic
+    [[ "$1" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]]
+}
+
+add_mapping() {
+    local domain="$1"
+    local ip="$2"
+
+    [[ -z "$domain" || -z "$ip" ]] && return
+    is_ipv4 "$ip" || return
+
+    # ignore invalid hostnames
+    if ! is_valid_domain "$domain"; then
+        return
+    fi
+    if [[ "$ip" == "$HOST_IP" ]]; then
+        return
+    fi
+
+    if domain_is_allowed "$domain"; then
+        ALLOWED_IPS+="$ip"$'\n'
+    else
+        NON_ALLOWED_MAP["$domain"]+="$ip "
+    fi
+}
+
+# -----------------------------
+# 1) From DNS answers
+# -----------------------------
+# We only use IPv4 rdata (rrtype A) for fast.log correlation
+while read -r domain ip; do
+    add_mapping "$domain" "$ip"
+done < <(
+    jq -r '
+      select(.event_type=="dns") |
+      if .dns.answers then
+        .dns.answers[] | select(.rrtype=="A") | (.rrname + " " + .rdata)
+      else
+        select(.dns.rrtype=="A" and .dns.rdata != null) |
+        (.dns.rrname + " " + .dns.rdata)
+      end
+    ' "$EVE_LOG"
+)
+
+# -----------------------------
+# 2) From HTTP and fileinfo events
+# -----------------------------
+# Use http.hostname + src_ip/dest_ip to build mappings
+while read -r domain ip; do
+    add_mapping "$domain" "$ip"
+done < <(
+    jq -r '
+        select(.event_type=="http" or .event_type=="fileinfo")
+        | select(.http.hostname != null)
+        | [
+            (.http.hostname + " " + .src_ip),
+            (.http.hostname + " " + .dest_ip)
+        ][]
+    ' "$EVE_LOG" \
+    | awk '!seen[$0]++'
+)
+
+# Deduplicate allowed IPs
+DNS_IPS=$(printf "%s" "$ALLOWED_IPS" | sed '/^$/d' | sort -u || true)
+
+# -----------------------------
+# 3) Read fast.log into memory
+# -----------------------------
+FAST_CONTENT=""
+if [[ -s "$FAST_LOG" ]]; then
+    FAST_CONTENT=$(cat "$FAST_LOG")
+    cp "$FAST_LOG" "$FAST_LOG".old
+    truncate -s 0 "$FAST_LOG"
+fi
+
+# -----------------------------
+# 4) Filter out allowed-domain IPs
+# -----------------------------
+if [[ -n "$DNS_IPS" ]]; then
+    REPORT=$(printf "%s\n" "$FAST_CONTENT" | grep -vFf <(echo "$DNS_IPS") || true)
+else
+    REPORT="$FAST_CONTENT"
+fi
+
+# -----------------------------
+# 5) Annotate REPORT with non-allowed domain info
+# -----------------------------
+ANNOTATED_REPORT=""
+
+while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+
+    ips_in_line=$(echo "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u || true)
+    annotation=""
+
+    for ip in $ips_in_line; do
+        for domain in "${!NON_ALLOWED_MAP[@]}"; do
+            if [[ " ${NON_ALLOWED_MAP[$domain]} " == *" $ip "* ]]; then
+                annotation+=" [DOMAIN:$domain]"
+            fi
+        done
+    done
+
+    if [[ -n "$annotation" ]]; then
+        ANNOTATED_REPORT+="$line$annotation"$'\n'
+    else
+        ANNOTATED_REPORT+="$line"$'\n'
+    fi
+
+done <<< "$REPORT"
+
+DOMAINS=""
+for domain in "${!NON_ALLOWED_MAP[@]}"; do
+    DOMAINS+="Domain: $domain
+Resolved/seen IPs: ${NON_ALLOWED_MAP[$domain]}
+
+"
+done
+
+# -----------------------------
+# 6) Build counted signature summary
+# -----------------------------
+SIG_SUMMARY=$(
+    printf "%s\n" "$ANNOTATED_REPORT" \
+    | awk '
+        {
+            line = $0
+
+            # find the signature block "[gid:sid:rev]"
+            start = index(line, "[")
+            if (start == 0) next
+
+            end = index(substr(line, start+1), "]")
+            if (end == 0) next
+
+            end = start + end  # absolute position of closing bracket
+
+            sig = substr(line, start, end - start + 1)
+
+            # message starts after the closing bracket + space
+            msg = substr(line, end + 2)
+
+            # trim leading/trailing spaces
+            sub(/^[ \t]+/, "", msg)
+            sub(/[ \t]+$/, "", msg)
+
+            print sig " " msg
+        }
+    ' \
+    | sort \
+    | uniq -c \
+    | sed 's/^ *//'
+)
+
+# -----------------------------
+# Email report output
+# -----------------------------
+EMAIL=""
+
+if [ -n "$DOMAINS" ]; then
+    EMAIL+="
+---------------------------------------------------
+Non-Allowed Domains
+---------------------------------------------------
+$DOMAINS
+"
+fi
+
+if [ -n "$SIG_SUMMARY" ]; then
+    EMAIL+="
+---------------------------------------------------
+Suricata Signatures
+---------------------------------------------------
+$SIG_SUMMARY
+
+
+"
+fi
+
+if [ -n "$ANNOTATED_REPORT" ]; then
+    EMAIL+="
+---------------------------------------------------
+Suricata Report
+---------------------------------------------------
+$ANNOTATED_REPORT
+
+
+"
+fi
+
+echo $EMAIL
