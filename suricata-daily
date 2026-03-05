@@ -229,7 +229,6 @@ Suricata Signatures
 ---------------------------------------------------
 $SIG_SUMMARY
 
-
 "
 fi
 
@@ -239,7 +238,6 @@ if [ -n "$ANNOTATED_REPORT" ]; then
 Suricata Report
 ---------------------------------------------------
 $ANNOTATED_REPORT
-
 
 "
 fi
