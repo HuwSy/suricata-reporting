@@ -203,6 +203,7 @@ SIG_SUMMARY=$(
             print sig " " msg
         }
     ' \
+    | sed -E 's/(1[79]2\.1[67][8]*\.[0-9]+\.[0-9]+):[0-9]+/\1/g' \
     | sort \
     | uniq -c \
     | sed 's/^ *//'
