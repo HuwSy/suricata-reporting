@@ -62,13 +62,9 @@ done < <(
             # split on literal " [**] "
             n = split($0, a, " [**] ");
 
-            # a[2] = domain
-            # a[3] = rrtype
-            # a[5] = answer
-
-            domain = a[2];
-            rr     = a[3];
-            ans    = a[5];
+            domain = a[3];
+            rr     = a[4];
+            ans    = a[6];
 
             gsub(/^[ \t]+|[ \t]+$/, "", domain);
             gsub(/^[ \t]+|[ \t]+$/, "", rr);
