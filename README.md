@@ -4,6 +4,9 @@ This assumes suricata is setup to allow what is needed, block what is not and al
 /etc/suricata/suricata.yaml
 ```
 outputs:
-  dns-log:
-    enabled: yes
+  - fast:
+      enabled: yes
+
+  - dns-log:
+      enabled: yes
 ```
