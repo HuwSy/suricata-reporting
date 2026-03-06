@@ -152,26 +152,23 @@ SIG_SUMMARY=$(
     printf "%s\n" "$ANNOTATED_REPORT" \
     | awk '
         {
-            line = $0
+            # Find the first [**]
+            s = index($0, "[**]")
+            if (s == 0) next
 
-            start = index(line, "[")
-            if (start == 0) next
+            # Find the next [**] after that
+            e = index(substr($0, s + 4), "[**]")
+            if (e == 0) next
 
-            end = index(substr(line, start+1), "]")
-            if (end == 0) next
+            # Adjust end index to full line
+            e = s + 4 + e + 2
 
-            end = start + end
+            # Extract the signature block
+            sig = substr($0, s, e - s)
 
-            sig = substr(line, start, end - start + 1)
-            msg = substr(line, end + 2)
-
-            sub(/^[ \t]+/, "", msg)
-            sub(/[ \t]+$/, "", msg)
-
-            print sig " " msg
+            print sig
         }
     ' \
-    | sed -E 's/(1[79]2\.1[67][8]*\.[0-9]+\.[0-9]+):[0-9]+/\1/g' \
     | sort \
     | uniq -c \
     | sed 's/^ *//'
