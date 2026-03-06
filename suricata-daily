@@ -164,7 +164,7 @@ SIG_SUMMARY=$(
             e = s + 4 + e + 2
 
             # Extract the signature block
-            sig = substr($0, s, e - s)
+            sig = substr($0, s, e - s + 1)
 
             print sig
         }
