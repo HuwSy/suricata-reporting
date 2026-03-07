@@ -87,7 +87,7 @@ canon_ipv6() {
         for ((i=0; i<8; i++)); do out+="${expanded[$i]}:"; done
         out="${out%:}"
     fi
-    printf "%s" "$out" | sed -E 's/::+/:/g
+    printf "%s" "$out" | sed -E 's/::+/:/g'
 }
 
 mapfile -t ALLOWED < "$DOMAINS"
