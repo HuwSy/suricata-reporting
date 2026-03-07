@@ -110,8 +110,9 @@ while IFS="|" read -r IP HOST EXP FLAG; do
     IP_HOST_FLAG["$key"]="$FLAG"
 done < "$DB"
 
-grep "Response" "$DNS_LOG" | while IFS= read -r line; do
-
+mv "$DNS_LOG" "$DNS_LOG.old"
+touch "$DNS_LOG"
+grep "Response" "$DNS_LOG.old" | while IFS= read -r line; do
     clean_line=$(printf '%s\n' "$line" | tr -d '[]*')
 
     set -- $clean_line
