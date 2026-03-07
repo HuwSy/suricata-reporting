@@ -125,6 +125,20 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
     prev=""
 
     for token in $clean_line; do
+        # Skip date on 1st column
+        if [ "$prev" = ""]; then
+            prev="Date"
+            continue
+        fi
+
+        # Host extraction (domain-like token)
+        if [ -z "$HOST" ]; then
+            case "$token" in
+                *\.[A-Za-z]*)
+                    HOST="$token"
+                    ;;
+            esac
+        fi
 
         # TTL extraction
         if [ "$prev" = "TTL" ]; then
@@ -135,25 +149,10 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
         fi
         prev="$token"
 
-        # Host extraction (domain-like token)
-        if [ -z "$HOST" ]; then
-            case "$token" in
-                *.*)
-                    case "$token" in
-                        *"->"* ) ;;
-                        *[!A-Za-z0-9.-]* ) ;;
-                        *)
-                            HOST="$token"
-                            ;;
-                    esac
-                    ;;
-            esac
-        fi
-
         # IPv4 extraction (first A record IP only)
         if [ -z "$IP" ]; then
             case "$token" in
-                [0-9]+.[0-9]+.[0-9]+.[0-9]+)
+                [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)
                     IP="$(canon_ipv4 "$token")"
                     ;;
             esac
@@ -162,7 +161,7 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
         # IPv6 extraction (first AAAA record IP only)
         if [ -z "$IP" ]; then
             case "$token" in
-                *:* )
+                [0-9a-fA-F]*:*:*)
                     IP="$(canon_ipv6 "$token")"
                     ;;
             esac
