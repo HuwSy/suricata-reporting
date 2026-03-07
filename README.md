@@ -10,3 +10,20 @@ outputs:
   - dns-log:
       enabled: yes
 ```
+
+/etc/suricata/suricata.yaml
+```
+vars:
+  address-groups:
+    allowed_ips: "/var/run/suricata-allowed-ips.list"
+```
+
+/etc/suricata/rules/local.rules
+```
+pass ip any any -> $allowed_ips any ( msg:"Allowed domain via DNS resolution"; sid:9900000; rev:1; )
+```
+
+cron
+```
+* * * * * /usr/sbin/suricata-allowed
+```
