@@ -154,10 +154,7 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
         if [ -z "$IP" ]; then
             case "$token" in
                 [0-9]*.[0-9]*.[0-9]*.[0-9]*)
-                    base="${token%%:*}"
-                    if canon_ipv4 "$base" >/dev/null 2>&1; then
-                        IP="$base"
-                    fi
+                    IP="$(canon_ipv4 "$token")"
                     ;;
             esac
         fi
@@ -166,9 +163,7 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
         if [ -z "$IP" ]; then
             case "$token" in
                 *:* )
-                    if printf "%s" "$token" | grep -qiE '^[0-9a-f:]+(%[0-9a-z]+)?$'; then
-                        IP="$(canon_ipv6 "$token")"
-                    fi
+                    IP="$(canon_ipv6 "$token")"
                     ;;
             esac
         fi
