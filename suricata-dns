@@ -113,7 +113,7 @@ done < "$DB"
 mv "$DNS_LOG" "$DNS_LOG.old"
 touch "$DNS_LOG"
 
-grep "Response" "$DNS_LOG.old" | while IFS= read -r line; do
+grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r line; do
     clean_line=$(printf "%s" "$line" | tr -d '[]*')
 
     HOST=""
