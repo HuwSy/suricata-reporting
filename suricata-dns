@@ -4,6 +4,7 @@ DNS_LOG="/var/log/suricata/dns.log"
 DOMAINS="/etc/suricata/allowed_domains.list"
 DB="/var/run/suricata-allowed-dns.db"
 OUT="/var/run/suricata-allowed-ips.list"
+RULE="/var/run/suricata-allowed-ips.rules"
 
 GRACE=60
 RETENTION=$((30 * 24 * 3600))
@@ -215,4 +216,24 @@ CURRENT_OUT=$(cat "$OUT")
 if [[ "$NEW_OUT" != "$CURRENT_OUT" ]]; then
     printf "%b" "$NEW_OUT" > "$OUT"
     suricatasc -c reload-rules >/dev/null 2>&1
+fi
+
+NEW_RULE=""
+C=9990000
+for key in "${!IP_HOST_EXP[@]}"; do
+    IFS="|" read -r IP HOST <<< "$key"
+    EXP="${IP_HOST_EXP[$key]}"
+    FLAG="${IP_HOST_FLAG[$key]}"
+    if (( FLAG == 1 && EXP > NOW )); then
+        NEW_RULE+="pass ip any any -> ${IP} any (msg:"Allowed ip via DNS resolution"; sid:$C; rev:1;)\n"
+        C=$(C+1)
+        NEW_RULE+="pass ip ${IP} any -> any any (msg:"Allowed ip via DNS resolution (established)"; sid:$C; rev:1;)\n"
+        C=$(C+1)
+    fi
+done
+
+CURRENT_RULE=$(cat "$RULE")
+if [[ "$NEW_RULE" != "$CURRENT_RULE" ]]; then
+    printf "%b" "$NEW_RULE" > "$RULE"
+    systemctl restart suricata
 fi
