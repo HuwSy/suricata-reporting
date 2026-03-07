@@ -1,0 +1,236 @@
+#!/bin/bash
+
+DNS_LOG="/var/log/suricata/dns.log"
+DOMAINS="/etc/suricata/allowed_domains.list"
+DB="/var/run/suricata-allowed-dns.db"
+OUT="/var/run/suricata-allowed-ips.list"
+
+GRACE=60
+RETENTION=$((30 * 24 * 3600))
+
+NOW=$(date +%s)
+CUTOFF=$((NOW - RETENTION))
+
+touch "$DB"
+touch "$OUT"
+
+# -------------------------------
+# IPv4 CANONICALISATION
+# -------------------------------
+canon_ipv4() {
+    local ip="$1"
+    local o1 o2 o3 o4
+
+    IFS='.' read -r o1 o2 o3 o4 <<< "$ip" || return 1
+
+    for o in "$o1" "$o2" "$o3" "$o4"; do
+        [[ "$o" =~ ^[0-9]+$ ]] || return 1
+        (( o >= 0 && o <= 255 )) || return 1
+    done
+
+    printf "%d.%d.%d.%d" "$o1" "$o2" "$o3" "$o4"
+}
+
+# -------------------------------
+# IPv6 SCOPE-ID STRIPPING
+# -------------------------------
+strip_scope_id() {
+    printf "%s" "${1%%%*}"
+}
+
+# -------------------------------
+# IPv6 CANONICALISATION
+# -------------------------------
+canon_ipv6() {
+    local ip
+    ip="$(strip_scope_id "$1")"
+    ip="${ip,,}"
+
+    IFS=':' read -ra parts <<< "$ip"
+
+    local expanded=()
+    local empty_seen=0
+
+    for ((i=0; i<${#parts[@]}; i++)); do
+        if [[ -z "${parts[$i]}" ]]; then
+            if (( empty_seen == 0 )); then
+                empty_seen=1
+                local missing=$((8 - (${#parts[@]} - 1)))
+                for ((j=0; j<missing; j++)); do
+                    expanded+=("0")
+                done
+            fi
+        else
+            expanded+=("${parts[$i]}")
+        fi
+    done
+
+    for ((i=0; i<8; i++)); do
+        expanded[$i]=$(printf "%x" "0x${expanded[$i]}")
+    done
+
+    local best_start=-1 best_len=0
+    local cur_start=-1 cur_len=0
+
+    for ((i=0; i<8; i++)); do
+        if [[ "${expanded[$i]}" == "0" ]]; then
+            if (( cur_start == -1 )); then
+                cur_start=$i
+                cur_len=1
+            else
+                ((cur_len++))
+            fi
+        else
+            if (( cur_len > best_len )); then
+                best_len=$cur_len
+                best_start=$cur_start
+            fi
+            cur_start=-1
+            cur_len=0
+        fi
+    done
+
+    if (( cur_len > best_len )); then
+        best_len=$cur_len
+        best_start=$cur_start
+    fi
+
+    local out=""
+    if (( best_len > 1 )); then
+        for ((i=0; i<best_start; i++)); do
+            out+="${expanded[$i]}:"
+        done
+        out+="::"
+        for ((i=best_start+best_len; i<8; i++)); do
+            out+="${expanded[$i]}:"
+        done
+        out="${out%:}"
+    else
+        for ((i=0; i<8; i++)); do
+            out+="${expanded[$i]}:"
+        done
+        out="${out%:}"
+    fi
+
+    printf "%s" "$out"
+}
+
+# -------------------------------
+# LOAD ALLOWED DOMAINS
+# -------------------------------
+mapfile -t ALLOWED < "$DOMAINS"
+
+is_allowed() {
+    local host="$1"
+    for d in "${ALLOWED[@]}"; do
+        [[ "$host" == "$d" ]] && return 0
+        [[ "$host" == *".$d" ]] && return 0
+    done
+    return 1
+}
+
+# -------------------------------
+# LOAD DB INTO MEMORY
+# -------------------------------
+declare -A IP_HOST_EXP
+declare -A IP_HOST_FLAG
+
+while IFS="|" read -r IP HOST EXP FLAG; do
+    [[ -z "$IP" ]] && continue
+    (( EXP >= CUTOFF )) || continue
+    key="${IP}|${HOST}"
+    IP_HOST_EXP["$key"]="$EXP"
+    IP_HOST_FLAG["$key"]="$FLAG"
+done < "$DB"
+
+# -------------------------------
+# PROCESS DNS LOG
+# -------------------------------
+grep "Response" "$DNS_LOG" | while IFS= read -r line; do
+    set -- $line
+
+    HOST=""
+    IP=""
+    TTL=""
+
+    for token in "$@"; do
+
+        # Hostname
+        case "$token" in
+            *[!A-Za-z0-9.-]* ) ;;
+            *.* | *-*) [[ -z "$HOST" ]] && HOST="$token" ;;
+        esac
+
+        # IPv4
+        case "$token" in
+            [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+                IP="$(canon_ipv4 "$token")" || continue
+                ;;
+        esac
+
+        # IPv6
+        case "$token" in
+            *:* )
+                [[ -z "$IP" ]] && IP="$(canon_ipv6 "$token")"
+                ;;
+        esac
+
+        # TTL
+        if [[ "$token" == "TTL" ]]; then
+            TTL="$2"
+        fi
+
+        [[ -n "$HOST" && -n "$IP" && -n "$TTL" ]] && break
+    done
+
+    [[ -z "$HOST" || -z "$IP" || -z "$TTL" ]] && continue
+
+    EXPIRY=$((NOW + TTL + GRACE))
+
+    if is_allowed "$HOST"; then
+        FLAG=1
+    else
+        FLAG=0
+    fi
+
+    key="${IP}|${HOST}"
+    IP_HOST_EXP["$key"]="$EXPIRY"
+    IP_HOST_FLAG["$key"]="$FLAG"
+
+done
+
+# -------------------------------
+# REBUILD DB CONTENT
+# -------------------------------
+NEW_DB=""
+for key in "${!IP_HOST_EXP[@]}"; do
+    IFS="|" read -r IP HOST <<< "$key"
+    EXP="${IP_HOST_EXP[$key]}"
+    FLAG="${IP_HOST_FLAG[$key]}"
+    NEW_DB+="${IP}|${HOST}|${EXP}|${FLAG}\n"
+done
+
+CURRENT_DB=$(cat "$DB")
+if [[ "$NEW_DB" != "$CURRENT_DB" ]]; then
+    printf "%b" "$NEW_DB" > "$DB"
+fi
+
+# -------------------------------
+# BUILD SURICATA ALLOW-LIST
+# -------------------------------
+NEW_OUT=""
+for key in "${!IP_HOST_EXP[@]}"; do
+    IFS="|" read -r IP HOST <<< "$key"
+    EXP="${IP_HOST_EXP[$key]}"
+    FLAG="${IP_HOST_FLAG[$key]}"
+
+    if (( FLAG == 1 && EXP > NOW )); then
+        NEW_OUT+="${IP}\n"
+    fi
+done
+
+CURRENT_OUT=$(cat "$OUT")
+if [[ "$NEW_OUT" != "$CURRENT_OUT" ]]; then
+    printf "%b" "$NEW_OUT" > "$OUT"
+    suricatasc -c reload-rules >/dev/null 2>&1
+fi
