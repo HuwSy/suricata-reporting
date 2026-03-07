@@ -147,43 +147,64 @@ done < "$DB"
 # PROCESS DNS LOG
 # -------------------------------
 grep "Response" "$DNS_LOG" | while IFS= read -r line; do
-    set -- $line
+    # Your lines look like:
+    # 03/07/2026-06:56:37.333121 [**] Response TX 8b01 [**] self [**] A [**] TTL 0 [**] 172.16.0.0 [**] 172.16.0.1:53 -> 172.16.0.0:53
+
+    # Strip [**] markers to simplify parsing
+    clean_line=$(echo "$line" | sed 's/
+
+\[\*\*\]
+
+//g')
+
+    # Tokenise
+    set -- $clean_line
 
     HOST=""
     IP=""
     TTL=""
+    ttl_next=0
 
     for token in "$@"; do
+        # TTL handling: when we see "TTL", the next token is the value
+        if (( ttl_next == 1 )); then
+            TTL="$token"
+            ttl_next=0
+        elif [[ "$token" == "TTL" ]]; then
+            ttl_next=1
+            continue
+        fi
 
-        # Hostname
+        # Hostname: simple heuristic (contains letters/dots/hyphens, no '->', no ':port')
         case "$token" in
-            *[!A-Za-z0-9.-]* ) ;;
-            *.* | *-*) [[ -z "$HOST" ]] && HOST="$token" ;;
+            *"->"* ) ;;
+            *[A-Za-z]*.* | *-*)
+                [[ -z "$HOST" ]] && HOST="$token"
+                ;;
         esac
 
         # IPv4
         case "$token" in
             [0-9]*.[0-9]*.[0-9]*.[0-9]*)
-                IP="$(canon_ipv4 "$token")" || continue
+                # Avoid grabbing IP:port; strip port if present
+                base="${token%%:*}"
+                IP="$(canon_ipv4 "$base")" || true
                 ;;
         esac
 
-        # IPv6
-        case "$token" in
-            *:* )
-                [[ -z "$IP" ]] && IP="$(canon_ipv6 "$token")"
-                ;;
-        esac
-
-        # TTL
-        if [[ "$token" == "TTL" ]]; then
-            TTL="$2"
+        # IPv6 (tightened to avoid timestamps like 03/07/2026-06:56:37.333121)
+        if [[ "$token" == *:* ]] && [[ "$token" =~ ^[0-9A-Fa-f:]+(%[0-9A-Za-z]+)?$ ]]; then
+            [[ -z "$IP" ]] && IP="$(canon_ipv6 "$token")"
         fi
 
         [[ -n "$HOST" && -n "$IP" && -n "$TTL" ]] && break
     done
 
+    # Skip if we didn't get all three
     [[ -z "$HOST" || -z "$IP" || -z "$TTL" ]] && continue
+
+    # TTL must be numeric; if not, skip to avoid arithmetic errors
+    [[ "$TTL" =~ ^[0-9]+$ ]] || continue
 
     EXPIRY=$((NOW + TTL + GRACE))
 
@@ -196,7 +217,6 @@ grep "Response" "$DNS_LOG" | while IFS= read -r line; do
     key="${IP}|${HOST}"
     IP_HOST_EXP["$key"]="$EXPIRY"
     IP_HOST_FLAG["$key"]="$FLAG"
-
 done
 
 # -------------------------------
