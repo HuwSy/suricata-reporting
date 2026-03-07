@@ -152,7 +152,7 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
         # IPv4 extraction (first A record IP only)
         if [ -z "$IP" ]; then
             case "$token" in
-                [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)
+                [0-9]*\.[0-9]*\.[0-9]*\.[0-9]*)
                     IP="$(canon_ipv4 "$token")"
                     ;;
             esac
