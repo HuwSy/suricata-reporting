@@ -112,48 +112,72 @@ done < "$DB"
 
 mv "$DNS_LOG" "$DNS_LOG.old"
 touch "$DNS_LOG"
-grep "Response" "$DNS_LOG.old" | while IFS= read -r line; do
-    clean_line=$(printf '%s\n' "$line" | tr -d '[]*')
 
-    set -- $clean_line
+grep "Response" "$DNS_LOG.old" | while IFS= read -r line; do
+    clean_line=$(printf "%s" "$line" | tr -d '[]*')
 
     HOST=""
     IP=""
     TTL=""
-    ttl_next=0
+    prev=""
 
-    for token in "$@"; do
-        if (( ttl_next == 1 )); then
-            TTL="$token"
-            ttl_next=0
-        elif [[ "$token" == "TTL" ]]; then
-            ttl_next=1
-            continue
+    for token in $clean_line; do
+
+        # TTL extraction
+        if [ "$prev" = "TTL" ]; then
+            case "$token" in
+                ''|*[!0-9]*) ;;
+                *) TTL="$token" ;;
+            esac
+        fi
+        prev="$token"
+
+        # Host extraction (domain-like token)
+        if [ -z "$HOST" ]; then
+            case "$token" in
+                *.*)
+                    case "$token" in
+                        *"->"* ) ;;
+                        *[!A-Za-z0-9.-]* ) ;;
+                        *)
+                            HOST="$token"
+                            ;;
+                    esac
+                    ;;
+            esac
         fi
 
-        case "$token" in
-            *"->"* ) ;;
-            *[A-Za-z]*.* | *-*)
-                [[ -z "$HOST" ]] && HOST="$token"
-                ;;
-        esac
-
-        case "$token" in
-            [0-9]*.[0-9]*.[0-9]*.[0-9]*)
-                base="${token%%:*}"
-                IP="$(canon_ipv4 "$base")" || true
-                ;;
-        esac
-
-        if [[ "$token" == *:* ]] && [[ "$token" =~ ^[0-9A-Fa-f:]+(%[0-9A-Za-z]+)?$ ]]; then
-            [[ -z "$IP" ]] && IP="$(canon_ipv6 "$token")"
+        # IPv4 extraction (first A record IP only)
+        if [ -z "$IP" ]; then
+            case "$token" in
+                [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+                    base="${token%%:*}"
+                    if canon_ipv4 "$base" >/dev/null 2>&1; then
+                        IP="$base"
+                    fi
+                    ;;
+            esac
         fi
 
-        [[ -n "$HOST" && -n "$IP" && -n "$TTL" ]] && break
+        # IPv6 extraction (first AAAA record IP only)
+        if [ -z "$IP" ]; then
+            case "$token" in
+                *:* )
+                    if printf "%s" "$token" | grep -qiE '^[0-9a-f:]+(%[0-9a-z]+)?$'; then
+                        IP="$(canon_ipv6 "$token")"
+                    fi
+                    ;;
+            esac
+        fi
+
+        if [ -n "$HOST" ] && [ -n "$IP" ] && [ -n "$TTL" ]; then
+            break
+        fi
     done
 
-    [[ -z "$HOST" || -z "$IP" || -z "$TTL" ]] && continue
-    [[ "$TTL" =~ ^[0-9]+$ ]] || continue
+    [ -z "$HOST" ] && continue
+    [ -z "$IP" ] && continue
+    [ -z "$TTL" ] && continue
 
     EXPIRY=$((NOW + TTL + GRACE))
 
