@@ -17,7 +17,10 @@ declare -A NON_ALLOWED_MAP
 ALLOWED_IPS=""
 
 is_ipv4() {
-    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+    case "$1" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 0 ;;
+    esac
+    return 1
 }
 
 domain_is_allowed() {
@@ -92,7 +95,13 @@ fi
 DNS_IPS=$(printf "%s" "$ALLOWED_IPS" | sed '/^$/d' | sort -u || true)
 
 if [[ -n "$DNS_IPS" ]]; then
-    REPORT=$(printf "%s\n" "$FAST_CONTENT" | grep -vFf <(echo "$DNS_IPS") || true)
+    # Write patterns to a real temp file (Jessie-safe)
+    TMP_PATTERNS=$(mktemp)
+    printf "%s\n" "$DNS_IPS" > "$TMP_PATTERNS"
+
+    REPORT=$(printf "%s\n" "$FAST_CONTENT" | grep -vFf "$TMP_PATTERNS" || true)
+
+    rm -f "$TMP_PATTERNS"
 else
     REPORT="$FAST_CONTENT"
 fi
