@@ -31,5 +31,5 @@ pass ip any any -> $allowed_ips any ( msg:"Allowed domain via DNS resolution"; s
 
 cron
 ```
-* * * * * /usr/sbin/suricata-allowed
+* * * * * /usr/sbin/suricata-dns
 ```
