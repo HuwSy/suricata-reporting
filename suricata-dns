@@ -126,7 +126,7 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
 
     for token in $clean_line; do
         # Skip date on 1st column
-        if [ "$prev" = ""]; then
+        if [ "$prev" = "" ]; then
             prev="Date"
             continue
         fi
