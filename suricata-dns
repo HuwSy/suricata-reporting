@@ -222,9 +222,13 @@ for key in "${!IP_HOST_EXP[@]}"; do
     EXP="${IP_HOST_EXP[$key]}"
     FLAG="${IP_HOST_FLAG[$key]}"
     if (( FLAG == 1 && EXP > NOW )); then
-        NEW_RULE+="pass ip any any -> $IP any (msg:\"Allowed ip via DNS resolution\"; sid:$C; rev:1;)\n"
+        NEW_RULE+="pass ip any any -> $IP 443 (msg:\"Allowed 443 via DNS resolution\"; sid:$C; rev:1;)\n"
         ((C++))
-        NEW_RULE+="pass ip $IP any -> any any (msg:\"Allowed ip via DNS resolution (established)\"; flow:from_server,established; sid:$C; rev:1;)\n"
+        NEW_RULE+="pass ip $IP 443 -> any any (msg:\"Allowed 443 via DNS resolution (established)\"; flow:from_server,established; sid:$C; rev:1;)\n"
+        ((C++))
+        NEW_RULE+="pass ip any any -> $IP 80 (msg:\"Allowed 80 via DNS resolution\"; sid:$C; rev:1;)\n"
+        ((C++))
+        NEW_RULE+="pass ip $IP 80 -> any any (msg:\"Allowed 80 via DNS resolution (established)\"; flow:from_server,established; sid:$C; rev:1;)\n"
         ((C++))
     fi
 done
