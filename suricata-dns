@@ -6,7 +6,7 @@ DB="/var/run/suricata-allowed-dns.db"
 OUT="/var/run/suricata-allowed-ips.list"
 RULE="/var/run/suricata-allowed-ips.rules"
 
-GRACE=3600
+GRACE=60
 RETENTION=$((30 * 24 * 3600))
 
 NOW=$(date +%s)
