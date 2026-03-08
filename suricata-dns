@@ -2,7 +2,7 @@
 
 DNS_LOG="/var/log/suricata/dns.log"
 DOMAINS="/etc/suricata/allowed_domains.list"
-DB="/var/run/suricata-allowed-dns.db"
+DB="/var/lib/suricata-allowed-dns.db"
 OUT="/var/run/suricata-allowed-ips.list"
 RULE="/var/run/suricata-allowed-ips.rules"
 
