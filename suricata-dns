@@ -61,7 +61,7 @@ mv "$DNS_LOG" "$DNS_LOG.old"
 touch "$DNS_LOG"
 
 while IFS= read -r line; do
-    clean_line=$(printf "%s" "$line" | tr -d '[]*')
+    clean_line=$(printf "%s" "$line" | tr -d '\r' | tr -d '[]*')
 
     HOST=""
     IP=""
