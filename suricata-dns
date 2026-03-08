@@ -13,7 +13,7 @@ NOW=$(date +%s)
 CUTOFF=$((NOW - RETENTION))
 
 touch "$DB"
-touch "$OUT"
+[ ! -s "$OUT" ] && echo "127.0.0.1" > "$OUT"
 [ ! -s "$RULE" ] && echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE"
 
 canon_ipv4() {
@@ -153,6 +153,8 @@ for key in "${!IP_HOST_EXP[@]}"; do
     fi
 done
 
+[ -z "$NEW_OUT" ] && NEW_OUT="127.0.0.1"
+
 NEED_RELOAD=0
 
 CURRENT_OUT=$(cat "$OUT")
@@ -179,13 +181,13 @@ for key in "${!IP_HOST_EXP[@]}"; do
     fi
 done
 
+[ -z "$NEW_RULE" ] && NEW_RULE="pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)"
+
 CURRENT_RULE=$(cat "$RULE")
 if [[ "$NEW_RULE" != "$CURRENT_RULE" ]]; then
     printf "%b" "$NEW_RULE" > "$RULE"
     NEED_RELOAD=1
 fi
-
-[ ! -s "$RULE" ] && echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE"
 
 if [ "$NEED_RELOAD" = "1" ]; then
     if ! suricata -c /etc/suricata/suricata*.yaml -T 2>&1; then 
