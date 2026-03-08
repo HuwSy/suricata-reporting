@@ -32,12 +32,7 @@ strip_scope_id() {
 }
 
 canon_ipv6() {
-    local t="$1"
-    for _ in 1 2 3 4; do
-        t=${t//:0/:}
-        t=${t//:::/::}
-    done
-    printf '%s\n' "$t"
+    printf "%s" "${1,,}"
 }
 
 mapfile -t ALLOWED < "$DOMAINS"
