@@ -60,7 +60,7 @@ done < "$DB"
 mv "$DNS_LOG" "$DNS_LOG.old"
 touch "$DNS_LOG"
 
-grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r line; do
+while IFS= read -r line; do
     clean_line=$(printf "%s" "$line" | tr -d '[]*')
 
     HOST=""
@@ -128,7 +128,7 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
     key="${IP}|${HOST}"
     IP_HOST_EXP["$key"]="$EXPIRY"
     IP_HOST_FLAG["$key"]="$FLAG"
-done
+done < <(grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA ")
 
 NEW_DB=""
 for key in "${!IP_HOST_EXP[@]}"; do
