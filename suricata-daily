@@ -42,7 +42,7 @@ add_mapping() {
 # -----------------------------
 # 1) Load DNS info from DB
 # -----------------------------
-while IFS='|' read -r ip allowed domain ts; do
+while IFS='|' read -r ip domain ts allowed; do
     [[ -n "$domain" ]] || continue
     if ! is_ipv4 "$ip" && ! is_ipv6 "$ip"; then
         continue
