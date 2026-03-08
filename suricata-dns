@@ -80,6 +80,14 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
             continue
         fi
 
+        # TTL extraction
+        if [ "$prev" = "TTL" ]; then
+            case "$token" in
+                ''|*[!0-9]*) ;;
+                *) TTL="$token" ;;
+            esac
+        fi
+
         # Host extraction (domain-like token)
         if [ -z "$HOST" ]; then
             case "$token" in
@@ -88,15 +96,6 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
                     ;;
             esac
         fi
-
-        # TTL extraction
-        if [ "$prev" = "TTL" ]; then
-            case "$token" in
-                ''|*[!0-9]*) ;;
-                *) TTL="$token" ;;
-            esac
-        fi
-        prev="$token"
 
         # IPv4 extraction (first A record IP only)
         if [ -z "$IP" ]; then
@@ -115,6 +114,8 @@ grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA " | while IFS= read -r 
                     ;;
             esac
         fi
+
+        prev="$token"
 
         if [ -n "$HOST" ] && [ -n "$IP" ] && [ -n "$TTL" ]; then
             break
