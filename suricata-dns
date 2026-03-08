@@ -32,63 +32,12 @@ strip_scope_id() {
 }
 
 canon_ipv6() {
-    local ip
-    ip="$(strip_scope_id "$1")"
-    ip="${ip,,}"
-    IFS=':' read -ra parts <<< "$ip"
-    local expanded=()
-    local empty_seen=0
-    for ((i=0; i<${#parts[@]}; i++)); do
-        if [[ -z "${parts[$i]}" ]]; then
-            if (( empty_seen == 0 )); then
-                empty_seen=1
-                local missing=$((8 - (${#parts[@]} - 1)))
-                for ((j=0; j<missing; j++)); do
-                    expanded+=("0")
-                done
-            fi
-        else
-            expanded+=("${parts[$i]}")
-        fi
+    local t="$1"
+    for _ in 1 2 3 4; do
+        t=${t//:0/:}
+        t=${t//:::/::}
     done
-    for ((i=0; i<8; i++)); do
-        expanded[$i]=$(printf "%x" "0x${expanded[$i]}")
-    done
-    local best_start=-1 best_len=0
-    local cur_start=-1 cur_len=0
-    for ((i=0; i<8; i++)); do
-        if [[ "${expanded[$i]}" == "0" ]]; then
-            if (( cur_start == -1 )); then
-                cur_start=$i
-                cur_len=1
-            else
-                ((cur_len++))
-            fi
-        else
-            if (( cur_len > best_len )); then
-                best_len=$cur_len
-                best_start=$cur_start
-            fi
-            cur_start=-1
-            cur_len=0
-        fi
-    done
-    if (( cur_len > best_len )); then
-        best_len=$cur_len
-        best_start=$cur_start
-    fi
-    local out=""
-    if (( best_len > 1 )); then
-        for ((i=0; i<best_start; i++)); do out+="${expanded[$i]}:"; done
-        out+="::"
-        for ((i=best_start+best_len; i<8; i++)); do out+="${expanded[$i]}:"; done
-        out="${out%:}"
-    else
-        for ((i=0; i<8; i++)); do out+="${expanded[$i]}:"; done
-        out="${out%:}"
-    fi
-    out=$(printf "%s" "$out" | sed -E 's/:::+/::/g')
-    printf "%s" "$out"
+    printf '%s\n' "$t"
 }
 
 mapfile -t ALLOWED < "$DOMAINS"
