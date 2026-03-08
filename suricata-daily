@@ -56,8 +56,8 @@ done < "$DB"
 FAST_CONTENT=""
 if [[ -s "$FAST_LOG" ]]; then
     FAST_CONTENT=$(cat "$FAST_LOG")
-    cp "$FAST_LOG" "$FAST_LOG".old
-    truncate -s 0 "$FAST_LOG"
+    mv "$FAST_LOG" "$FAST_LOG.old"
+    touch "$FAST_LOG"
 fi
 
 # -----------------------------
