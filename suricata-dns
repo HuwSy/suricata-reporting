@@ -157,10 +157,12 @@ for key in "${!IP_HOST_EXP[@]}"; do
     fi
 done
 
+NEED_RELOAD=0
+
 CURRENT_OUT=$(cat "$OUT")
 if [[ "$NEW_OUT" != "$CURRENT_OUT" ]]; then
     printf "%b" "$NEW_OUT" > "$OUT"
-    suricatasc -c reload-rules >/dev/null 2>&1
+    NEED_RELOAD=1
 fi
 
 NEW_RULE=""
@@ -184,5 +186,14 @@ done
 CURRENT_RULE=$(cat "$RULE")
 if [[ "$NEW_RULE" != "$CURRENT_RULE" ]]; then
     printf "%b" "$NEW_RULE" > "$RULE"
-    systemctl restart suricata
+    NEED_RELOAD=1
+fi
+
+if [ "$NEED_RELOAD" = "1" ]; then
+    if suricatasc -c reload-rules >/dev/null 2>&1; then
+        echo "Rules reloaded"
+    else
+        echo "Reload not supported, restarting Suricata"
+        systemctl restart suricata
+    fi
 fi
