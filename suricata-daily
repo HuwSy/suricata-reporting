@@ -1,52 +1,38 @@
 #!/bin/bash
 
-ALLOWED_DOMAINS="/etc/suricata/allowed_domains.list"
 FAST_LOG="/var/log/suricata/fast.log"
-DNS_LOG="/var/log/suricata/dns.log"
 HOST_IP=$(hostname -I | awk '{print $1}')
+DB="/var/run/suricata-allowed-dns.db"
 
 # -----------------------------
-# Load allowed domains
+# Data structures
 # -----------------------------
-mapfile -t ALLOWED < "$ALLOWED_DOMAINS"
-
-# Hash: domain → "ip1 ip2 ip3"
 declare -A NON_ALLOWED_MAP
-
-# Temp list of allowed IPs
 ALLOWED_IPS=""
 
+# -----------------------------
+# IP validators
+# -----------------------------
 is_ipv4() {
-    case "$1" in
-        [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 0 ;;
-    esac
-    return 1
+    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
 }
 
-domain_is_allowed() {
-    local domain="$1"
-    for a in "${ALLOWED[@]}"; do
-        if [[ "$domain" == "$a" || "$domain" == *".$a" ]]; then
-            return 0
-        fi
-    done
-    return 1
+is_ipv6() {
+    [[ "$1" =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ || "$1" =~ :: ]]
 }
 
-is_valid_domain() {
-    [[ "$1" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]]
-}
-
+# -----------------------------
+# Add mapping from DB
+# -----------------------------
 add_mapping() {
     local domain="$1"
     local ip="$2"
+    local allowed="$3"
 
     [[ -z "$domain" || -z "$ip" ]] && return
-    is_ipv4 "$ip" || return
-    is_valid_domain "$domain" || return
     [[ "$ip" == "$HOST_IP" ]] && return
 
-    if domain_is_allowed "$domain"; then
+    if [[ "$allowed" = "1" ]]; then
         ALLOWED_IPS+="$ip"$'\n'
     else
         NON_ALLOWED_MAP["$domain"]+="$ip "
@@ -54,30 +40,15 @@ add_mapping() {
 }
 
 # -----------------------------
-# 1) DNS answers from dns.log
+# 1) Load DNS info from DB
 # -----------------------------
-# Use only IPv4 A records for correlation
-while read -r domain ip; do
-    add_mapping "$domain" "$ip"
-done < <(
-    awk '
-        /Response TX/ {
-            # split on literal " [**] "
-            n = split($0, a, " [**] ");
-
-            domain = a[3];
-            rr     = a[4];
-            ans    = a[6];
-
-            gsub(/^[ \t]+|[ \t]+$/, "", domain);
-            gsub(/^[ \t]+|[ \t]+$/, "", rr);
-            gsub(/^[ \t]+|[ \t]+$/, "", ans);
-
-            if (rr == "A" && ans ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/)
-                print domain " " ans;
-        }
-    ' "$DNS_LOG" | sort -u
-)
+while IFS='|' read -r ip allowed domain ts; do
+    [[ -n "$domain" ]] || continue
+    if ! is_ipv4 "$ip" && ! is_ipv6 "$ip"; then
+        continue
+    fi
+    add_mapping "$domain" "$ip" "$allowed"
+done < "$DB"
 
 # -----------------------------
 # 2) Read fast.log into memory
@@ -90,31 +61,28 @@ if [[ -s "$FAST_LOG" ]]; then
 fi
 
 # -----------------------------
-# 3) Filter out allowed-domain IPs
+# 3) Filter out allowed IPs (in-memory)
 # -----------------------------
 DNS_IPS=$(printf "%s" "$ALLOWED_IPS" | sed '/^$/d' | sort -u || true)
 
 if [[ -n "$DNS_IPS" ]]; then
-    # Write patterns to a real temp file (Jessie-safe)
-    TMP_PATTERNS=$(mktemp)
-    printf "%s\n" "$DNS_IPS" > "$TMP_PATTERNS"
-
-    REPORT=$(printf "%s\n" "$FAST_CONTENT" | grep -vFf "$TMP_PATTERNS" || true)
-
-    rm -f "$TMP_PATTERNS"
+    REPORT=$(printf "%s\n" "$FAST_CONTENT" | grep -vFf <(printf "%s" "$DNS_IPS") || true)
 else
     REPORT="$FAST_CONTENT"
 fi
 
 # -----------------------------
-# 4) Annotate REPORT with non-allowed domain info
+# 4) Annotate REPORT with domain info
 # -----------------------------
 ANNOTATED_REPORT=""
 
 while IFS= read -r line; do
     [[ -z "$line" ]] && continue
 
-    ips_in_line=$(echo "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u || true)
+    ips_in_line=$(echo "$line" \
+        | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|::[0-9a-fA-F]{1,4}|[0-9a-fA-F]{1,4}::' \
+        | sort -u || true)
+
     annotation=""
 
     for ip in $ips_in_line; do
@@ -130,13 +98,17 @@ while IFS= read -r line; do
 done <<< "$REPORT"
 
 # -----------------------------
-# 5) Build DOMAINS list only for domains that have IPs in fast.log
+# 5) Build DOMAINS list
 # -----------------------------
+FAST_IPS=$(printf "%s\n" "$REPORT" \
+    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|::[0-9a-fA-F]{1,4}|[0-9a-fA-F]{1,4}::' \
+    | sort -u || true)
+
 DOMAINS=""
-FAST_IPS=$(printf "%s\n" "$REPORT" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u || true)
 
 for domain in "${!NON_ALLOWED_MAP[@]}"; do
-    domain_ips=$(printf "%s" "${NON_ALLOWED_MAP[$domain]}" | tr ' ' '\n' | sed '/^$/d' | sort -u || true)
+    domain_ips=$(printf "%s" "${NON_ALLOWED_MAP[$domain]}" \
+        | tr ' ' '\n' | sed '/^$/d' | sort -u || true)
 
     match_found=false
     for ip in $domain_ips; do
@@ -161,20 +133,12 @@ SIG_SUMMARY=$(
     printf "%s\n" "$ANNOTATED_REPORT" \
     | awk '
         {
-            # Find the first [**]
             s = index($0, "[**]")
             if (s == 0) next
-
-            # Find the next [**] after that
             e = index(substr($0, s + 4), "[**]")
             if (e == 0) next
-
-            # Adjust end index to full line
             e = s + 4 + e + 2
-
-            # Extract the signature block
             sig = substr($0, s, e - s + 1)
-
             print sig
         }
     ' \
