@@ -2,7 +2,7 @@
 
 FAST_LOG="/var/log/suricata/fast.log"
 HOST_IP=$(hostname -I | awk '{print $1}')
-DB="/var/run/suricata-allowed-dns.db"
+DB="/var/lib/suricata-allowed-dns.db"
 
 # -----------------------------
 # Data structures
