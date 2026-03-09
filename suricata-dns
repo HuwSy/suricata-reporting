@@ -264,7 +264,7 @@ main_loop() {
         process_dns_log_once
         build_out_and_rules
         if (( count >= 600 )); then
-            write_db &
+            write_db
             count=0
         fi
         ((count++))
