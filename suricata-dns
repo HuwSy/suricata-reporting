@@ -7,38 +7,18 @@ OUT="/var/run/suricata-allowed-ips.list"
 RULE="/var/run/suricata-allowed-ips.rules"
 
 GRACE=30
-RETENTION=$((30 * 24 * 3600))
-
-NOW=$(date +%s)
-CUTOFF=$((NOW - RETENTION))
+RETENTION=$((30 * 24 * 3600))   # 30 days
 
 touch "$DB"
 [ ! -s "$OUT" ] && echo "127.0.0.1" > "$OUT"
 [ ! -s "$RULE" ] && echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE"
 
-canon_ipv4() {
-    local ip="$1"
-    local o1 o2 o3 o4
-    IFS='.' read -r o1 o2 o3 o4 <<< "$ip" || return 1
-    for o in "$o1" "$o2" "$o3" "$o4"; do
-        [[ "$o" =~ ^[0-9]+$ ]] || return 1
-        (( o >= 0 && o <= 255 )) || return 1
-    done
-    printf "%d.%d.%d.%d" "$o1" "$o2" "$o3" "$o4"
-}
-
-strip_scope_id() {
-    printf "%s" "${1%%%*}"
-}
-
-canon_ipv6() {
-    printf "%s" "${1,,}"
-}
-
+# --- load allowed domains once ---
 mapfile -t ALLOWED < "$DOMAINS"
 
 is_allowed() {
     local host="$1"
+    local d
     for d in "${ALLOWED[@]}"; do
         [[ "$host" == "$d" ]] && return 0
         [[ "$host" == *".$d" ]] && return 0
@@ -46,157 +26,237 @@ is_allowed() {
     return 1
 }
 
-declare -A IP_HOST_EXP
-declare -A IP_HOST_FLAG
+# --- in‑memory DB: key = "IP|HOST", value = "HOST|FLAG|IP|START|EXPIRY|EXPIRED" ---
+declare -A DB_MAP
 
-while IFS="|" read -r IP HOST EXP FLAG; do
-    [[ -z "$IP" ]] && continue
-    (( EXP >= CUTOFF )) || continue
-    key="${IP}|${HOST}"
-    IP_HOST_EXP["$key"]="$EXP"
-    IP_HOST_FLAG["$key"]="$FLAG"
-done < "$DB"
-
-mv "$DNS_LOG" "$DNS_LOG.old"
-touch "$DNS_LOG"
-
-while IFS= read -r line; do
-    clean_line=$(printf "%s" "$line" | tr -d '\r' | tr -d '[]*')
-
-    TIME=""
-    HOST=""
-    IP=""
-    TTL=""
-    prev=""
-
-    for token in $clean_line; do
-        # 1st column date of response so start ttl
-        if [ "$prev" = "" ]; then
-            TIME=$(date -d "$token" +%s)
-            prev="Date"
-            continue
+load_db() {
+    local now cutoff line host flag ip start expiry expired key
+    now=$(date +%s)
+    cutoff=$((now - RETENTION))
+    while IFS="|" read -r host flag ip start expiry expired; do
+        [ -z "$host" ] && continue
+        # drop entries older than retention
+        [ -n "$expiry" ] && [ "$expiry" -lt "$cutoff" ] && continue
+        # recompute expired flag
+        if [ -n "$expiry" ] && [ "$expiry" -le "$now" ]; then
+            expired=1
+        else
+            expired=0
         fi
+        key="${ip}|${host}"
+        DB_MAP["$key"]="${host}|${flag}|${ip}|${start}|${expiry}|${expired}"
+    done < "$DB"
+}
 
-        # TTL extraction
-        if [ "$prev" = "TTL" ]; then
-            case "$token" in
-                ''|*[!0-9]*) ;;
-                *) TTL="$token" ;;
-            esac
+write_db() {
+    local now cutoff key val host flag ip start expiry expired
+    now=$(date +%s)
+    cutoff=$((now - RETENTION))
+    local new_db=""
+    for key in "${!DB_MAP[@]}"; do
+        val=${DB_MAP["$key"]}
+        IFS="|" read -r host flag ip start expiry expired <<< "$val"
+        [ -z "$host" ] && continue
+        [ -n "$expiry" ] && [ "$expiry" -lt "$cutoff" ] && continue
+        # recompute expired flag on write
+        if [ -n "$expiry" ] && [ "$expiry" -le "$now" ]; then
+            expired=1
+        else
+            expired=0
         fi
+        new_db+="${host}|${flag}|${ip}|${start}|${expiry}|${expired}\n"
+    done
+    # only write if changed
+    local current_db
+    current_db=$(cat "$DB")
+    if [[ "$new_db" != "$current_db" ]]; then
+        printf "%b" "$new_db" > "$DB"
+    fi
+}
 
-        # Host extraction (domain-like token)
-        if [ -z "$HOST" ]; then
-            case "$token" in
-                *\.[A-Za-z]*)
-                    HOST="$token"
-                    ;;
-            esac
-        fi
+build_out_and_rules() {
+    local now key val host flag ip start expiry expired
+    now=$(date +%s)
+    local new_out=""
+    local new_rule=""
+    local sid=9990000
 
-        # IPv4 extraction (first A record IP only)
-        if [ -z "$IP" ]; then
-            case "$token" in
-                [0-9]*\.[0-9]*\.[0-9]*\.[0-9]*)
-                    IP="$(canon_ipv4 "$token")"
-                    ;;
-            esac
-        fi
+    for key in "${!DB_MAP[@]}"; do
+        val=${DB_MAP["$key"]}
+        IFS="|" read -r host flag ip start expiry expired <<< "$val"
+        [ -z "$host" ] && continue
+        # skip expired
+        [ -n "$expiry" ] && [ "$expiry" -le "$now" ] && continue
+        [ "$flag" -ne 1 ] && continue
 
-        # IPv6 extraction (first AAAA record IP only)
-        if [ -z "$IP" ]; then
-            case "$token" in
-                [0-9a-fA-F]*:*:*)
-                    IP="$(canon_ipv6 "$token")"
-                    ;;
-            esac
-        fi
+        new_out+="${ip}\n"
 
-        prev="$token"
-
-        if [ -n "$HOST" ] && [ -n "$IP" ] && [ -n "$TTL" ]; then
-            break
-        fi
+        # rules for 443
+        new_rule+="pass ip any any -> $ip 443 (msg:\"Allowed 443 via DNS resolution\"; sid:$sid; rev:1;)\n"
+        ((sid++))
+        new_rule+="pass ip $ip 443 -> any any (msg:\"Allowed 443 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        ((sid++))
+        # rules for 80
+        new_rule+="pass ip any any -> $ip 80 (msg:\"Allowed 80 via DNS resolution\"; sid:$sid; rev:1;)\n"
+        ((sid++))
+        new_rule+="pass ip $ip 80 -> any any (msg:\"Allowed 80 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        ((sid++))
     done
 
-    [ -z "$TIME" ] && TIME=$NOW
-    [ -z "$HOST" ] && continue
-    [ -z "$IP" ] && continue
-    [ -z "$TTL" ] && continue
+    [ -z "$new_out" ] && new_out="127.0.0.1"
+    [ -z "$new_rule" ] && new_rule="pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)"
 
-    EXPIRY=$((TIME + TTL + GRACE))
+    local need_reload=0
 
-    if is_allowed "$HOST"; then FLAG=1; else FLAG=0; fi
-
-    key="${IP}|${HOST}"
-    IP_HOST_EXP["$key"]="$EXPIRY"
-    IP_HOST_FLAG["$key"]="$FLAG"
-done < <(grep "Response" "$DNS_LOG.old" | grep -e " A " -e " AAAA ")
-
-NEW_DB=""
-for key in "${!IP_HOST_EXP[@]}"; do
-    IFS="|" read -r IP HOST <<< "$key"
-    EXP="${IP_HOST_EXP[$key]}"
-    FLAG="${IP_HOST_FLAG[$key]}"
-    NEW_DB+="${IP}|${HOST}|${EXP}|${FLAG}\n"
-done
-
-CURRENT_DB=$(cat "$DB")
-if [[ "$NEW_DB" != "$CURRENT_DB" ]]; then
-    printf "%b" "$NEW_DB" > "$DB"
-fi
-
-NEW_OUT=""
-for key in "${!IP_HOST_EXP[@]}"; do
-    IFS="|" read -r IP HOST <<< "$key"
-    EXP="${IP_HOST_EXP[$key]}"
-    FLAG="${IP_HOST_FLAG[$key]}"
-    if (( FLAG == 1 && EXP > NOW )); then
-        NEW_OUT+="${IP}\n"
+    local current_out current_rule
+    current_out=$(cat "$OUT")
+    if [[ "$new_out" != "$current_out" ]]; then
+        printf "%b" "$new_out" > "$OUT"
+        need_reload=1
     fi
-done
 
-[ -z "$NEW_OUT" ] && NEW_OUT="127.0.0.1"
-
-NEED_RELOAD=0
-
-CURRENT_OUT=$(cat "$OUT")
-if [[ "$NEW_OUT" != "$CURRENT_OUT" ]]; then
-    printf "%b" "$NEW_OUT" > "$OUT"
-    NEED_RELOAD=1
-fi
-
-NEW_RULE=""
-C=9990000
-for key in "${!IP_HOST_EXP[@]}"; do
-    IFS="|" read -r IP HOST <<< "$key"
-    EXP="${IP_HOST_EXP[$key]}"
-    FLAG="${IP_HOST_FLAG[$key]}"
-    if (( FLAG == 1 && EXP > NOW )); then
-        NEW_RULE+="pass ip any any -> $IP 443 (msg:\"Allowed 443 via DNS resolution\"; sid:$C; rev:1;)\n"
-        ((C++))
-        NEW_RULE+="pass ip $IP 443 -> any any (msg:\"Allowed 443 via DNS resolution (established)\"; flow:from_server,established; sid:$C; rev:1;)\n"
-        ((C++))
-        NEW_RULE+="pass ip any any -> $IP 80 (msg:\"Allowed 80 via DNS resolution\"; sid:$C; rev:1;)\n"
-        ((C++))
-        NEW_RULE+="pass ip $IP 80 -> any any (msg:\"Allowed 80 via DNS resolution (established)\"; flow:from_server,established; sid:$C; rev:1;)\n"
-        ((C++))
+    current_rule=$(cat "$RULE")
+    if [[ "$new_rule" != "$current_rule" ]]; then
+        printf "%b" "$new_rule" > "$RULE"
+        need_reload=1
     fi
-done
 
-[ -z "$NEW_RULE" ] && NEW_RULE="pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)"
-
-CURRENT_RULE=$(cat "$RULE")
-if [[ "$NEW_RULE" != "$CURRENT_RULE" ]]; then
-    printf "%b" "$NEW_RULE" > "$RULE"
-    NEED_RELOAD=1
-fi
-
-if [ "$NEED_RELOAD" = "1" ]; then
-    if ! suricata -c /etc/suricata/suricata*.yaml -T 2>&1; then 
-        exit 1
+    if [ "$need_reload" = "1" ]; then
+        if ! suricata -c /etc/suricata/suricata*.yaml -T 2>&1; then
+            return
+        fi
+        if ! suricatasc -c reload-rules >/dev/null 2>&1; then
+            systemctl restart suricata
+        fi
     fi
-    if ! suricatasc -c reload-rules >/dev/null 2>&1; then
-        systemctl restart suricata
-    fi
-fi
+}
+
+process_dns_log_once() {
+    # move log so only new data is processed next run
+    mv "$DNS_LOG" "$DNS_LOG.old" 2>/dev/null || true
+    : > "$DNS_LOG"
+
+    [ ! -s "$DNS_LOG.old" ] && return
+
+    local now midnight ts host ip ttl token prev
+    now=$(date +%s)
+    # midnight today
+    midnight=$(date -d "$(date +%Y-%m-%d) 00:00:00" +%s)
+
+    while IFS= read -r line; do
+        # only responses with A/AAAA
+        case "$line" in
+            *" Response "*)
+                case "$line" in
+                    *" A "*|*" AAAA "*) ;;
+                    *) continue ;;
+                esac
+                ;;
+            *) continue ;;
+        esac
+
+        host=""
+        ip=""
+        ttl=""
+        ts=""
+        prev=""
+
+        for token in $line; do
+            if [ -z "$ts" ]; then
+                # first token is timestamp like 08/03/2026-15:30:45.987 or 08/03/2026 15:30:45.987
+                ts="$token"
+                prev="TS"
+                continue
+            fi
+
+            # TTL extraction: token after literal "TTL"
+            if [ "$prev" = "TTL" ]; then
+                case "$token" in
+                    ''|*[!0-9]*) ;;
+                    *) ttl="$token" ;;
+                esac
+            fi
+
+            # Host extraction
+            if [ -z "$host" ]; then
+                case "$token" in
+                    *\.[A-Za-z]*)
+                        host="$token"
+                        ;;
+                esac
+            fi
+
+            # IPv4 extraction
+            if [ -z "$ip" ]; then
+                case "$token" in
+                    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+                        ip="$token"
+                        ;;
+                esac
+            fi
+
+            # IPv6 extraction (simple)
+            if [ -z "$ip" ]; then
+                case "$token" in
+                    *:*:*)
+                        ip="${token,,}"
+                        ;;
+                esac
+            fi
+
+            prev="$token"
+
+            if [ -n "$host" ] && [ -n "$ip" ] && [ -n "$ttl" ]; then
+                break
+            fi
+        done
+
+        [ -z "$host" ] && continue
+        [ -z "$ip" ] && continue
+        [ -z "$ttl" ] && continue
+
+        # parse time from ts: assume time starts at position 11 (after date and separator)
+        # works for "DD/MM/YYYY HH:MM:SS.xxx" and "DD/MM/YYYY-HH:MM:SS.xxx"
+        local h m s
+        h=${ts:11:2}
+        m=${ts:14:2}
+        s=${ts:17:2}
+        # guard against bad data
+        case "$h$m$s" in
+            *[!0-9]*) continue ;;
+        esac
+
+        local seconds_since_midnight
+        seconds_since_midnight=$((10#$h*3600 + 10#$m*60 + 10#$s))
+        local start expiry
+        start=$((midnight + seconds_since_midnight))
+        expiry=$((start + ttl + GRACE))
+
+        local flag=0
+        if is_allowed "$host"; then
+            flag=1
+        fi
+
+        local expired=0
+        [ "$expiry" -le "$now" ] && expired=1
+
+        local key="${ip}|${host}"
+        DB_MAP["$key"]="${host}|${flag}|${ip}|${start}|${expiry}|${expired}"
+    done < "$DNS_LOG.old"
+}
+
+main_loop() {
+    load_db
+    local count=0
+    while true; do
+        process_dns_log_once
+        build_out_and_rules
+        if (( count % 60 == 0 )); then
+            write_db
+        fi
+        ((count++))
+        sleep 60
+    done
+}
+
+main_loop
