@@ -141,7 +141,7 @@ build_out_and_rules() {
 }
 
 process_dns_log_once() {
-    mv "$DNS_LOG" "$DNS_LOG.old" 2>/dev/null || true
+    cp "$DNS_LOG" "$DNS_LOG.old" 2>/dev/null || true
     : > "$DNS_LOG"
     [ ! -s "$DNS_LOG.old" ] && return
 
