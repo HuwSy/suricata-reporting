@@ -45,9 +45,6 @@ now=$(date +%s)
 if [[ -s "$DB" ]]; then
     while IFS='|' read -r host flag ip start expiry expired; do
         [[ -n "$host" ]] || continue
-        [[ "$expiry" =~ ^[0-9]+$ ]] || continue
-        [[ "$expired" = "1" ]] && continue
-        (( expiry <= now )) && continue
 
         if ! is_ipv4 "$ip" && ! is_ipv6 "$ip"; then
             continue
