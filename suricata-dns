@@ -70,9 +70,9 @@ while IFS= read -r line; do
     prev=""
 
     for token in $clean_line; do
-        # Skip date on 1st column
+        # 1st column date of response so start ttl
         if [ "$prev" = "" ]; then
-            TIME="$token"
+            TIME=$(date -d "$token" +%s)
             prev="Date"
             continue
         fi
