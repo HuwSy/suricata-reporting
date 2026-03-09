@@ -4,9 +4,6 @@ FAST_LOG="/var/log/suricata/fast.log"
 HOST_IP=$(hostname -I | awk '{print $1}')
 DB="/var/lib/suricata-allowed-dns.db"
 
-# -----------------------------
-# Data structures
-# -----------------------------
 declare -A NON_ALLOWED_MAP
 ALLOWED_IPS=""
 
@@ -41,14 +38,24 @@ add_mapping() {
 
 # -----------------------------
 # 1) Load DNS info from DB
+#    DB format: HOST|FLAG|IP|START|EXPIRY|EXPIRED
 # -----------------------------
-while IFS='|' read -r ip domain ts allowed; do
-    [[ -n "$domain" ]] || continue
-    if ! is_ipv4 "$ip" && ! is_ipv6 "$ip"; then
-        continue
-    fi
-    add_mapping "$domain" "$ip" "$allowed"
-done < "$DB"
+now=$(date +%s)
+
+if [[ -s "$DB" ]]; then
+    while IFS='|' read -r host flag ip start expiry expired; do
+        [[ -n "$host" ]] || continue
+        [[ "$expiry" =~ ^[0-9]+$ ]] || continue
+        [[ "$expired" = "1" ]] && continue
+        (( expiry <= now )) && continue
+
+        if ! is_ipv4 "$ip" && ! is_ipv6 "$ip"; then
+            continue
+        fi
+
+        add_mapping "$host" "$ip" "$flag"
+    done < "$DB"
+fi
 
 # -----------------------------
 # 2) Read fast.log into memory
@@ -56,7 +63,7 @@ done < "$DB"
 FAST_CONTENT=""
 if [[ -s "$FAST_LOG" ]]; then
     mv "$FAST_LOG" "$FAST_LOG.old"
-    touch "$FAST_LOG"
+    : > "$FAST_LOG"
     FAST_CONTENT=$(cat "$FAST_LOG.old")
 fi
 
@@ -94,7 +101,6 @@ while IFS= read -r line; do
     done
 
     ANNOTATED_REPORT+="$line$annotation"$'\n'
-
 done <<< "$REPORT"
 
 # -----------------------------
