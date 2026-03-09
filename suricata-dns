@@ -263,11 +263,12 @@ main_loop() {
     while true; do
         process_dns_log_once
         build_out_and_rules
-        if (( count % 60 == 0 )); then
-            write_db
+        if (( count >= 600 )); then
+            write_db &
+            count=0
         fi
         ((count++))
-        sleep 60
+        sleep 6
     done
 }
 
