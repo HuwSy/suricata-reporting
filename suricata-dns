@@ -215,13 +215,17 @@ process_dns_log_once() {
         [ -z "$ip" ] && continue
         [ -z "$ttl" ] && continue
 
-        # parse time from ts: assume time starts at position 11 (after date and separator)
-        # works for "DD/MM/YYYY HH:MM:SS.xxx" and "DD/MM/YYYY-HH:MM:SS.xxx"
-        local h m s
-        h=${ts:11:2}
-        m=${ts:14:2}
-        s=${ts:17:2}
-        # guard against bad data
+        # ts = "3/09/2026-16:16:54.447568" or "03/09/2026-16:16:54.447568"
+
+        # extract time portion after the dash
+        timepart=${ts#*-}      # → "16:16:54.447568"
+
+        # extract HH MM SS
+        h=${timepart:0:2}
+        m=${timepart:3:2}
+        s=${timepart:6:2}
+
+        # validate numeric
         case "$h$m$s" in
             *[!0-9]*) continue ;;
         esac
