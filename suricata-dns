@@ -32,6 +32,9 @@ if [ ! -s "$RULE" ]; then
     needs_start=1
 fi
 
+# cache if possible
+vmtouch -F "$DB" "$OUT" "$RULE" || true
+
 start_restart $needs_start
 
 # --- load allowed domains once ---
