@@ -6,7 +6,7 @@ DB="/var/lib/suricata-allowed-dns.db"
 OUT="/var/run/suricata-allowed-ips.list"
 RULE="/var/run/suricata-allowed-ips.rules"
 
-GRACE=$((24 * 3600))
+GRACE=30
 RETENTION=$((30 * 24 * 3600))
 
 NOW=$(date +%s)
@@ -63,6 +63,7 @@ touch "$DNS_LOG"
 while IFS= read -r line; do
     clean_line=$(printf "%s" "$line" | tr -d '\r' | tr -d '[]*')
 
+    TIME=""
     HOST=""
     IP=""
     TTL=""
@@ -71,6 +72,7 @@ while IFS= read -r line; do
     for token in $clean_line; do
         # Skip date on 1st column
         if [ "$prev" = "" ]; then
+            TIME="$token"
             prev="Date"
             continue
         fi
@@ -117,11 +119,12 @@ while IFS= read -r line; do
         fi
     done
 
+    [ -z "$TIME" ] TIME=$NOW
     [ -z "$HOST" ] && continue
     [ -z "$IP" ] && continue
     [ -z "$TTL" ] && continue
 
-    EXPIRY=$((NOW + TTL + GRACE))
+    EXPIRY=$((TIME + TTL + GRACE))
 
     if is_allowed "$HOST"; then FLAG=1; else FLAG=0; fi
 
