@@ -10,8 +10,18 @@ GRACE=30
 RETENTION=$((30 * 24 * 3600))   # 30 days
 
 touch "$DB"
-[ ! -s "$OUT" ] && echo "127.0.0.1" > "$OUT"
-[ ! -s "$RULE" ] && echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE"
+
+needs_start=0
+if [ ! -s "$OUT" ]; then
+    echo "127.0.0.1" > "$OUT"
+    needs_start=1
+fi
+if [ ! -s "$RULE" ]; then
+    echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE"
+    needs_start=1
+fi
+
+start_restart $needs_start
 
 # --- load allowed domains once ---
 mapfile -t ALLOWED < "$DOMAINS"
@@ -121,7 +131,11 @@ build_out_and_rules() {
         need_reload=1
     fi
 
-    if [ "$need_reload" = "1" ]; then
+    start_restart $need_reload
+}
+
+start_restart() {
+    if [ "$1" = "1" ]; then
         if ! suricata -c /etc/suricata/suricata*.yaml -T 2>&1; then
             return
         fi
