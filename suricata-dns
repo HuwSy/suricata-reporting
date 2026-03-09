@@ -6,12 +6,12 @@ DB="/var/lib/suricata-allowed-dns.db"
 OUT="/var/run/suricata-allowed-ips.list"
 RULE="/var/run/suricata-allowed-ips.rules"
 
-GRACE=30
+GRACE=60
 RETENTION=$((30 * 24 * 3600))
 
 start_restart() {
     if [ "$1" = "1" ]; then
-        if ! suricata -c /etc/suricata/suricata*.yaml -T 2>&1; then
+        if ! suricata -c /etc/suricata/suricata*.yaml -T >/dev/null 2>&1; then
             return
         fi
         if ! suricatasc -c reload-rules >/dev/null 2>&1; then
@@ -23,15 +23,23 @@ start_restart() {
 touch "$DB"
 
 needs_start=0
-[ ! -s "$OUT" ] && echo "127.0.0.1" > "$OUT" && needs_start=1
-[ ! -s "$RULE" ] && echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE" && needs_start=1
+if [ ! -s "$OUT" ]; then
+    echo "127.0.0.1" > "$OUT"
+    needs_start=1
+fi
+if [ ! -s "$RULE" ]; then
+    echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE"
+    needs_start=1
+fi
 
 start_restart $needs_start
 
+# --- load allowed domains once ---
 mapfile -t ALLOWED < "$DOMAINS"
 
 is_allowed() {
     local host="$1"
+    local d
     for d in "${ALLOWED[@]}"; do
         [[ "$host" == "$d" ]] && return 0
         [[ "$host" == *".$d" ]] && return 0
@@ -39,6 +47,7 @@ is_allowed() {
     return 1
 }
 
+# in-memory DB: key = "IP|HOST", value = "HOST|FLAG|IP|START|EXPIRY|EXPIRED"
 declare -A DB_MAP
 
 load_db() {
@@ -50,12 +59,6 @@ load_db() {
         [ -z "$host" ] && continue
         [[ "$expiry" =~ ^[0-9]+$ ]] || continue
         [ "$expiry" -lt "$cutoff" ] && continue
-
-        if [ "$expiry" -le "$now" ]; then
-            expired=1
-        else
-            expired=0
-        fi
 
         key="${ip}|${host}"
         DB_MAP["$key"]="${host}|${flag}|${ip}|${start}|${expiry}|${expired}"
@@ -71,20 +74,15 @@ write_db() {
     for key in "${!DB_MAP[@]}"; do
         val=${DB_MAP["$key"]}
         IFS="|" read -r host flag ip start expiry expired <<< "$val"
+        [ -z "$host" ] && continue
         [[ "$expiry" =~ ^[0-9]+$ ]] || continue
         [ "$expiry" -lt "$cutoff" ] && continue
-
-        if [ "$expiry" -le "$now" ]; then
-            expired=1
-        else
-            expired=0
-        fi
 
         new_db+="${host}|${flag}|${ip}|${start}|${expiry}|${expired}\n"
     done
 
-    local current_db
-    current_db=$(cat "$DB")
+    local current_db=""
+    [ -f "$DB" ] && current_db=$(cat "$DB")
     if [[ "$new_db" != "$current_db" ]]; then
         printf "%b" "$new_db" > "$DB"
     fi
@@ -93,47 +91,60 @@ write_db() {
 build_out_and_rules() {
     local now key val host flag ip start expiry expired
     now=$(date +%s)
-    local new_out=""
-    local new_rule=""
+    local ips_buf=""
+    local rules_buf=""
     local sid=9990000
 
     for key in "${!DB_MAP[@]}"; do
         val=${DB_MAP["$key"]}
         IFS="|" read -r host flag ip start expiry expired <<< "$val"
-
+        [ -z "$host" ] && continue
         [[ "$expiry" =~ ^[0-9]+$ ]] || continue
         [ "$expiry" -le "$now" ] && continue
         [ "$flag" -ne 1 ] && continue
 
         case "$ip" in
-            *.*.*.*|*:*:*) ;; 
+            *.*.*.*|*:*:*) ;;
             *) continue ;;
         esac
 
-        new_out+="${ip}\n"
+        ips_buf+="${ip}\n"
 
-        new_rule+="pass ip any any -> $ip 443 (msg:\"Allowed 443 via DNS resolution\"; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip any any -> $ip 443 (msg:\"Allowed 443 via DNS resolution\"; sid:$sid; rev:1;)\n"
         ((sid++))
-        new_rule+="pass ip $ip 443 -> any any (msg:\"Allowed 443 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip $ip 443 -> any any (msg:\"Allowed 443 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
         ((sid++))
-        new_rule+="pass ip any any -> $ip 80 (msg:\"Allowed 80 via DNS resolution\"; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip any any -> $ip 80 (msg:\"Allowed 80 via DNS resolution\"; sid:$sid; rev:1;)\n"
         ((sid++))
-        new_rule+="pass ip $ip 80 -> any any (msg:\"Allowed 80 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip $ip 80 -> any any (msg:\"Allowed 80 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
         ((sid++))
     done
 
-    [ -z "$new_out" ] && new_out="127.0.0.1"
-    [ -z "$new_rule" ] && new_rule="pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)"
+    local new_out new_rule
+    if [ -n "$ips_buf" ]; then
+        new_out=$(printf "%b" "$ips_buf" | sed '/^$/d' | sort -u)
+    else
+        new_out="127.0.0.1"
+    fi
+
+    if [ -n "$rules_buf" ]; then
+        new_rule=$(printf "%b" "$rules_buf" | sed '/^$/d' | sort)
+    else
+        new_rule="pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)"
+    fi
 
     local need_reload=0
+    local current_out="" current_rule=""
 
-    if [[ "$new_out" != "$(cat "$OUT")" ]]; then
-        printf "%b" "$new_out" > "$OUT"
+    [ -f "$OUT" ] && current_out=$(cat "$OUT")
+    if [[ "$new_out" != "$current_out" ]]; then
+        printf "%s\n" "$new_out" > "$OUT"
         need_reload=1
     fi
 
-    if [[ "$new_rule" != "$(cat "$RULE")" ]]; then
-        printf "%b" "$new_rule" > "$RULE"
+    [ -f "$RULE" ] && current_rule=$(cat "$RULE")
+    if [[ "$new_rule" != "$current_rule" ]]; then
+        printf "%s\n" "$new_rule" > "$RULE"
         need_reload=1
     fi
 
@@ -141,8 +152,14 @@ build_out_and_rules() {
 }
 
 process_dns_log_once() {
-    cp "$DNS_LOG" "$DNS_LOG.old" 2>/dev/null || true
-    : > "$DNS_LOG"
+    # safe rotation: copy + truncate
+    if [ -s "$DNS_LOG" ]; then
+        cp "$DNS_LOG" "$DNS_LOG.old" 2>/dev/null || true
+        : > "$DNS_LOG"
+    else
+        return
+    fi
+
     [ ! -s "$DNS_LOG.old" ] && return
 
     local now midnight ts host ip ttl token prev
@@ -242,11 +259,13 @@ process_dns_log_once() {
 
 main_loop() {
     load_db
-    count=0
+    local count=0
     while true; do
         process_dns_log_once
         build_out_and_rules
-        (( count % 60 == 0 )) && write_db
+        if (( count % 60 == 0 )); then
+            write_db
+        fi
         ((count++))
         sleep 60
     done
