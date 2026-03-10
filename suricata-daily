@@ -59,9 +59,10 @@ fi
 # -----------------------------
 FAST_CONTENT=""
 if [[ -s "$FAST_LOG" ]]; then
-    cp "$FAST_LOG" "$FAST_LOG.old"
+    cp "$FAST_LOG" "$FAST_LOG.o"
     : > "$FAST_LOG"
-    FAST_CONTENT=$(cat "$FAST_LOG.old")
+    FAST_CONTENT=$(cat "$FAST_LOG.o")
+    cat "$FAST_LOG.o" >> "$FAST_LOG.old"
 fi
 
 # -----------------------------
