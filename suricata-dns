@@ -157,13 +157,13 @@ build_out_and_rules() {
 process_dns_log_once() {
     # safe rotation: copy + truncate
     if [ -s "$DNS_LOG" ]; then
-        cp "$DNS_LOG" "$DNS_LOG.old" 2>/dev/null || true
+        cp "$DNS_LOG" "$DNS_LOG.o" 2>/dev/null || true
         : > "$DNS_LOG"
     else
         return
     fi
 
-    [ ! -s "$DNS_LOG.old" ] && return
+    [ ! -s "$DNS_LOG.o" ] && return
 
     local now midnight ts host ip ttl token prev
     now=$(date +%s)
@@ -257,7 +257,8 @@ process_dns_log_once() {
 
         key="${ip}|${host}"
         DB_MAP["$key"]="${host}|${flag}|${ip}|${start}|${expiry}|${expired}"
-    done < "$DNS_LOG.old"
+    done < "$DNS_LOG.o"
+    cat "$DNS_LOG.o" >> "$DNS_LOG.old"
 }
 
 main_loop() {
