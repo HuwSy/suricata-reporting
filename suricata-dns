@@ -6,6 +6,9 @@ DB="/var/lib/suricata-allowed-dns.db"
 OUT="/var/run/suricata-allowed-ips.list"
 RULE="/var/run/suricata-allowed-ips.rules"
 
+DAEMON=0
+[ "$1" = "-d" ] && DAEMON=1
+
 GRACE=60
 RETENTION=$((30 * 24 * 3600))
 
@@ -267,6 +270,9 @@ main_loop() {
     while true; do
         process_dns_log_once
         build_out_and_rules
+        if [ "$DAEMON" = "0" ]; then
+            break
+        fi
         if (( count >= 600 )); then
             write_db
             count=0
