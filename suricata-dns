@@ -113,13 +113,13 @@ build_out_and_rules() {
 
         ips_buf+="${ip}\n"
 
-        rules_buf+="pass ip any any -> $ip 443 (msg:\"Allowed 443 via DNS resolution\"; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip any any -> $ip 443 (msg:\"Allowed 443 via DNS to $host\"; sid:$sid; rev:1;)\n"
         ((sid++))
-        rules_buf+="pass ip $ip 443 -> any any (msg:\"Allowed 443 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip $ip 443 -> any any (msg:\"Allowed 443 via DNS to $host (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
         ((sid++))
-        rules_buf+="pass ip any any -> $ip 80 (msg:\"Allowed 80 via DNS resolution\"; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip any any -> $ip 80 (msg:\"Allowed 80 via DNS to $host\"; sid:$sid; rev:1;)\n"
         ((sid++))
-        rules_buf+="pass ip $ip 80 -> any any (msg:\"Allowed 80 via DNS resolution (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        rules_buf+="pass ip $ip 80 -> any any (msg:\"Allowed 80 via DNS to $host (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
         ((sid++))
     done
 
