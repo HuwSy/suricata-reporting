@@ -36,7 +36,7 @@ if [ ! -s "$RULE" ]; then
 fi
 
 # cache if possible
-vmtouch -F "$DB" "$OUT" "$RULE" || true
+vmtouch -t "$DB" || true
 
 start_restart $needs_start
 
