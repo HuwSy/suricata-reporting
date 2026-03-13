@@ -1,6 +1,5 @@
 #!/bin/sh
 
-EXPECTED_CONTAINERS="$1"
 OUTPUT="/var/lib/suricata-variables-docker.yaml"
 
 ###############################################
@@ -42,7 +41,7 @@ printf "DOCKER_NETS: \"[%s]\"\n" "$(printf "%s" "$DOCKER_NETS" | tr '\n' ',')" >
 # 5. Resolve each expected container
 ###############################################
 
-for cname in $EXPECTED_CONTAINERS; do
+for cname in "$@"; do
   # Sanitize: keep only A–Z, a–z, 0–9, _
   safe_name=$(printf "%s" "$cname" | tr -cd 'A-Za-z0-9_')
   [ -z "$safe_name" ] && continue
