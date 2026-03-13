@@ -30,10 +30,10 @@ DOCKER_NETS=$(docker network inspect $(docker network ls -q) | awk -F'"' '/"Subn
 printf "%s\n---\n" "%YAML 1.1" >> "$OUTPUT"
 
 # HOME_NET
-printf "HOME_NET: \"[%s]\"\n" "$(printf "%s\n%s" "$HOME_NETS" "$HOME_NETS6" | sed '/^$/d' | sed -z 's/\n/,/g')" >> "$OUTPUT"
+printf "HOME_NET: \"[%s]\"\n" "$(printf "%s\n%s\n" "$HOME_NETS" "$HOME_NETS6" | sed '/^$/d' | sed -z 's/\n/,/g')" >> "$OUTPUT"
 
 # HOST_IP
-printf "HOST_IP: \"[%s]\"\n" "$(printf "%s\n%s" "$HOST_IPv4" "$HOST_IPv6" | sed '/^$/d' | sed -z 's/\n/,/g')" >> "$OUTPUT"
+printf "HOST_IP: \"[%s]\"\n" "$(printf "%s\n%s\n" "$HOST_IPv4" "$HOST_IPv6" | sed '/^$/d' | sed -z 's/\n/,/g')" >> "$OUTPUT"
 
 # DOCKER_NETS
 printf "DOCKER_NETS: \"[%s]\"\n" "$(printf "%s" "$DOCKER_NETS" | tr '\n' ',')" >> "$OUTPUT"
