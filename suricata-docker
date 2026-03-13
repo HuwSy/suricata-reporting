@@ -26,6 +26,7 @@ DOCKER_NETS=$(docker network inspect $(docker network ls -q) | awk -F'"' '/"Subn
 # 4. Write HOME_NET and HOST_IP
 ###############################################
 
+: > "$OUTPUT"
 printf "%s\n---\n" "%YAML 1.1" >> "$OUTPUT"
 
 # HOME_NET
