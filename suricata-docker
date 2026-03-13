@@ -36,11 +36,8 @@ printf "HOME_NET: \"[%s]\"\n" "$(
 
 # HOST_IP
 printf "HOST_IP: \"[%s]\"\n" "$(
-  echo $HOST_IPv4" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+  echo $HOST_IPv4" "$DOCKER_NETS" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
 )" >> "$OUTPUT"
-
-# DOCKER_NETS
-printf "DOCKER_NETS: \"[%s]\"\n" "$(printf "%s" "$DOCKER_NETS" | tr '\n' ',')" >> "$OUTPUT"
 
 ###############################################
 # 5. Resolve each expected container
