@@ -3,8 +3,8 @@
 DNS_LOG="/var/log/suricata/dns.log"
 DOMAINS="/etc/suricata/allowed_domains.list"
 DB="/var/lib/suricata-allowed-dns.db"
-OUT="/var/run/suricata-allowed-ips.list"
-RULE="/var/run/suricata-allowed-ips.rules"
+OUT="/var/lib/suricata-allowed-ips.list"
+RULE="/var/lib/suricata-allowed-ips.rules"
 
 DAEMON=0
 [ "$1" = "-d" ] && DAEMON=1
