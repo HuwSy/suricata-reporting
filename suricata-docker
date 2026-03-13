@@ -3,18 +3,34 @@
 OUTPUT="/var/lib/suricata-variables-docker.yaml"
 
 ###############################################
-# 1. Collect host IPv4 + IPv6 addresses
+# 1. Collect IPv4 + IPv6 addresses
 ###############################################
 
-HOST_IPv4=$(ip -4 addr show scope global | awk '/inet / {print $2}' | cut -d/ -f1)
-HOST_IPv6=$(ip -6 addr show scope global | awk '/inet6 / {print $2}' | cut -d/ -f1)
+HOST_IPv4=$(
+    ip -4 -o addr show scope global \
+    | grep -vE 'docker0|br-|veth' \
+    | awk '/inet / {print $4}' \
+    | cut -d/ -f1
+)
+
+HOST_IPv6=$(
+    ip -6 -o addr show scope global \
+    | grep -vE 'docker0|br-|veth' \
+    | awk '/inet6 / {print $4}' \
+    | cut -d/ -f1
+)
 
 ###############################################
-# 2. Collect host network CIDRs for HOME_NET
+# 2. Collect network CIDRs
 ###############################################
 
-HOME_NETS4=$(ip -o -f inet addr show scope global | awk '{print $4}')
-HOME_NETS6=$(ip -o -f inet6 addr show scope global | awk '{print $4}')
+HOME_NETS4=$(ip -o -f inet addr show scope global \
+    | grep -vE 'docker0|br-|veth' \
+    | awk '{print $4}')
+
+HOME_NETS6=$(ip -o -f inet6 addr show scope global \
+    | grep -vE 'docker0|br-|veth' \
+    | awk '{print $4}')
 
 ###############################################
 # 3. Collect Docker network CIDRs
@@ -34,9 +50,19 @@ printf "HOME_NET: \"[%s]\"\n" "$(
   echo $HOME_NETS4" "$HOME_NETS6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
 )" >> "$OUTPUT"
 
+# KNOWN_NET
+printf "KNOWN_NET: \"[%s]\"\n" "$(
+  echo $HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+)" >> "$OUTPUT"
+
+# SRV_IP
+printf "SRV_IP: \"[%s]\"\n" "$(
+  echo $HOST_IPv4" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+)" >> "$OUTPUT"
+
 # HOST_IP
 printf "HOST_IP: \"[%s]\"\n" "$(
-  echo $HOST_IPv4" "$DOCKER_NETS" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+  echo $HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
 )" >> "$OUTPUT"
 
 ###############################################
