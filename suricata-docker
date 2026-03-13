@@ -47,22 +47,22 @@ printf "%s\n---\n" "%YAML 1.1" >> "$OUTPUT"
 
 # HOME_NET
 printf "HOME_NET: \"[%s]\"\n" "$(
-  echo $HOME_NETS4" "$HOME_NETS6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+  echo $HOME_NETS4" "$HOME_NETS6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
 )" >> "$OUTPUT"
 
 # KNOWN_NET
 printf "KNOWN_NET: \"[%s]\"\n" "$(
-  echo $HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+  echo $HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
 )" >> "$OUTPUT"
 
 # SRV_IP
 printf "SRV_IP: \"[%s]\"\n" "$(
-  echo $HOST_IPv4" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+  echo $HOST_IPv4" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
 )" >> "$OUTPUT"
 
 # HOST_IP
 printf "HOST_IP: \"[%s]\"\n" "$(
-  echo $HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//'
+  echo $HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
 )" >> "$OUTPUT"
 
 ###############################################
