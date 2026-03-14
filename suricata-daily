@@ -152,6 +152,77 @@ SIG_SUMMARY=$(
 )
 
 # -----------------------------
+# 7) Build counted destination summary
+# -----------------------------
+DST_SUMMARY="$(
+printf '%s\n' "$ANNOTATED_REPORT" \
+| awk '
+function trim_ts(raw,   a,date,time,d,newdate,t,newtime) {
+    split(raw, a, "-")
+    date = a[1]
+    time = a[2]
+
+    split(date, d, "/")
+    newdate = d[3] "-" d[1] "-" d[2]
+
+    split(time, t, ":")
+    newtime = t[1] ":" t[2]
+
+    return newdate " " newtime
+}
+
+function is_private(ip) {
+    return (ip ~ /^10\./ || ip ~ /^192\.168\./ || ip ~ /^172\.(1[6-9]|2[0-9]|3[0-1])\./)
+}
+
+{
+    rawts = $1
+    ts = trim_ts(rawts)
+
+    # Extract source and destination fields
+    src = $(NF-2)
+    dst = $NF
+
+    split(src, s, ":")
+    split(dst, d, ":")
+
+    srcip = s[1]
+    dstip = d[1]
+
+    # Select the external IP:port regardless of direction
+    if (!is_private(srcip)) {
+        ipport = src
+    } else if (!is_private(dstip)) {
+        ipport = dst
+    } else {
+        next
+    }
+
+    count[ipport]++
+
+    if (!(ipport in first)) {
+        first[ipport] = ts
+    }
+
+    last[ipport] = ts
+}
+
+END {
+    printf "%-22s %-8s %-20s %-20s\n", "External_IP:Port", "Count", "First_Seen", "Last_Seen"
+    printf "%-22s %-8s %-20s %-20s\n", "------------------", "-----", "--------------------", "--------------------"
+
+    for (i in count) {
+        printf "%s|%d|%s|%s\n", i, count[i], first[i], last[i]
+    }
+}' \
+| sort -t"|" -k3,3 \
+| awk -F"|" '
+{
+    printf "%-22s %-8s %-20s %-20s\n", $1, $2, $3, $4
+}'
+)"
+
+# -----------------------------
 # Email/report output
 # -----------------------------
 EMAIL=""
@@ -171,6 +242,16 @@ if [ -n "$SIG_SUMMARY" ]; then
 Suricata Signatures
 ---------------------------------------------------
 $SIG_SUMMARY
+
+"
+fi
+
+if [ -n "$DST_SUMMARY" ]; then
+    EMAIL+="
+---------------------------------------------------
+External Summary
+---------------------------------------------------
+$DST_SUMMARY
 
 "
 fi
