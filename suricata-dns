@@ -95,27 +95,30 @@ less_regular_jobs() {
     local variables
 
     variables=$'%YAML 1.1\n---\n'
-    
     # HOME_NET
-    variables+=$(printf "HOME_NET: \"[%s]\"\n" "$(
-      echo "$HOME_NETS4" "$HOME_NETS6" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
-    )")
+    variables+="HOME_NET: \"[$(
+      echo "$HOME_NETS4" "$HOME_NETS6" \
+        | sed 's/ /,/g; s/^,//; s/,$//; s/,,/,/g'
+    )]\""$'\n'
     
     # KNOWN_NET
-    variables+=$(printf "KNOWN_NET: \"[%s]\"\n" "$(
-      echo "$HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
-    )")
+    variables+="KNOWN_NET: \"[$(
+      echo "$HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS" \
+        | sed 's/ /,/g; s/^,//; s/,$//; s/,,/,/g'
+    )]\""$'\n'
     
     # SRV_IP
-    variables+=$(printf "SRV_IP: \"[%s]\"\n" "$(
-      echo "$HOST_IPv4" "$HOST_IPv6" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
-    )")
+    variables+="SRV_IP: \"[$(
+      echo "$HOST_IPv4" "$HOST_IPv6" \
+        | sed 's/ /,/g; s/^,//; s/,$//; s/,,/,/g'
+    )]\""$'\n'
     
     # HOST_IP
-    variables+=$(printf "HOST_IP: \"[%s]\"\n" "$(
-      echo "$HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
-    )")
-    
+    variables+="HOST_IP: \"[$(
+      echo "$HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS" \
+        | sed 's/ /,/g; s/^,//; s/,$//; s/,,/,/g'
+    )]\""$'\n'
+
     for cname in "$ARGS"; do
       # skip for -d daemonise
       [ "$cname" = "-d" ] && continue
