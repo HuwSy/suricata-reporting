@@ -42,11 +42,13 @@ REPORT=$(printf "%s\n" "$FAST_CONTENT" \
 | mawk -v allowed="$DNS_IPS" '
     BEGIN {
         n = split(allowed, a, "\n")
-        for (i=1;i<=n;i++) allow[a[i]]=1
+        for (i=1;i<=n;i++) if (a[i] != "") allow[a[i]]=1
     }
     {
         skip=0
-        for (ip in allow) if (ip != "" && index($0, ip)) skip=1
+        for (ip in allow) {
+            if (ip != "" && index($0, ip)) { skip=1; break }
+        }
         if (!skip) print
     }
 ')
@@ -91,7 +93,7 @@ printf "%s\n" "$REPORT" \
             line = substr(line, RSTART+RLENGTH)
         }
 
-        # Full IPv6 (8 groups only)
+        # IPv6
         line=$0
         while (match(line, /[0-9A-Fa-f]{4}(:[0-9A-Fa-f]{4}){7}/)) {
             ip = substr(line, RSTART, RLENGTH)
@@ -102,6 +104,7 @@ printf "%s\n" "$REPORT" \
 
         # Annotation
         ann=""
+        delete arr
         split(ips, arr)
         for (i in arr) {
             ip=arr[i]
@@ -116,16 +119,20 @@ printf "%s\n" "$REPORT" \
 
         # External summary
         rawts=$1
+        delete t; delete d
         split(rawts, t, "-")
         split(t[1], d, "/")
         ts = d[3] "-" d[1] "-" d[2] " " substr(t[2],1,5)
 
         src=$(NF-2)
         dst=$NF
-        split(src, s, ":")
-        split(dst, d2, ":")
 
-        srcip=s[1]; dstip=d2[1]
+        delete s; delete d2
+        ns = split(src, s, ":")
+        nd = split(dst, d2, ":")
+
+        srcip = (ns >= 1 ? s[1] : src)
+        dstip = (nd >= 1 ? d2[1] : dst)
 
         if (!is_private(srcip)) ipport=src
         else if (!is_private(dstip)) ipport=dst
