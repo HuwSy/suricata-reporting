@@ -20,6 +20,11 @@ HOST_IPv6=$(
     | cut -d/ -f1
 )
 
+if [[ -z "$HOST_IPv4" && -z "$HOST_IPv6" ]]; then
+    echo "No addresses found, retaining previous version."
+    exit 1
+fi
+
 ###############################################
 # 2. Collect network CIDRs
 ###############################################
