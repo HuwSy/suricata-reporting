@@ -18,7 +18,7 @@ RETENTION=$((7 * 24 * 3600))
 
 # in-memory DB: key = "IP|HOST", value = "HOST|FLAG|IP|START|EXPIRY|EXPIRED"
 declare -A DB_MAP
-declare -A ALLOWED
+declare -a ALLOWED
 
 # ensure file and cache if possible
 touch "$DB"
@@ -91,7 +91,7 @@ less_regular_jobs() {
     local variables
 
     : > "$HOSTS"
-    variables=$(printf "%s\n---\n" "%YAML 1.1")
+    variables=$'%YAML 1.1\n---\n'
     
     # HOME_NET
     variables+=$(printf "HOME_NET: \"[%s]\"\n" "$(
@@ -252,8 +252,6 @@ process_dns_log() {
         return
     fi
 
-    [ ! -s "$DNS_LOG.o" ] && return
-
     local now midnight ts host ip ttl token prev
     now=$(date +%s)
     midnight=$(date -d "$(date +%Y-%m-%d) 00:00:00" +%s)
@@ -353,7 +351,7 @@ main_loop() {
     load_db
     local count=0
     while true; do
-        if (( count = 0 )); then
+        if (( count == 0 )); then
            less_regular_jobs
         fi
         process_dns_log
