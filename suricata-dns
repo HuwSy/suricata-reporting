@@ -94,7 +94,6 @@ less_regular_jobs() {
 
     local variables
 
-    : > "$HOSTS"
     variables=$'%YAML 1.1\n---\n'
     
     # HOME_NET
