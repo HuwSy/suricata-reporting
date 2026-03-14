@@ -127,6 +127,8 @@ less_regular_jobs() {
       safe_name=$(printf "%s" "$cname" | tr -cd 'A-Za-z0-9_')
       [ -z "$safe_name" ] && continue
     
+      printf "[DEBUG] %s\n" "Getting $cname" >&2
+
       # Find matching container (running or stopped)
       real_container=$(docker ps -a --format '{{.Names}}' | grep -Fx "$cname")
     
