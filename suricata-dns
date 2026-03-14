@@ -95,22 +95,22 @@ less_regular_jobs() {
     
     # HOME_NET
     variables+=$(printf "HOME_NET: \"[%s]\"\n" "$(
-      echo $HOME_NETS4" "$HOME_NETS6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+      echo "$HOME_NETS4" "$HOME_NETS6" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
     )")
     
     # KNOWN_NET
     variables+=$(printf "KNOWN_NET: \"[%s]\"\n" "$(
-      echo $HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+      echo "$HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
     )")
     
     # SRV_IP
     variables+=$(printf "SRV_IP: \"[%s]\"\n" "$(
-      echo $HOST_IPv4" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+      echo "$HOST_IPv4" "$HOST_IPv6" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
     )")
     
     # HOST_IP
     variables+=$(printf "HOST_IP: \"[%s]\"\n" "$(
-      echo $HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+      echo "$HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS" | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
     )")
     
     for cname in "$ARGS"; do
