@@ -93,7 +93,7 @@ printf "%s\n" "$REPORT" \
             line = substr(line, RSTART+RLENGTH)
         }
 
-        # IPv6
+        # Full IPv6 (8 groups only)
         line=$0
         while (match(line, /[0-9A-Fa-f]{4}(:[0-9A-Fa-f]{4}){7}/)) {
             ip = substr(line, RSTART, RLENGTH)
@@ -127,12 +127,14 @@ printf "%s\n" "$REPORT" \
         src=$(NF-2)
         dst=$NF
 
-        delete s; delete d2
-        ns = split(src, s, ":")
-        nd = split(dst, d2, ":")
+        delete src_parts
+        delete dst_parts
 
-        srcip = (ns >= 1 ? s[1] : src)
-        dstip = (nd >= 1 ? d2[1] : dst)
+        ns = split(src, src_parts, ":")
+        nd = split(dst, dst_parts, ":")
+
+        srcip = (ns >= 1 ? src_parts[1] : src)
+        dstip = (nd >= 1 ? dst_parts[1] : dst)
 
         if (!is_private(srcip)) ipport=src
         else if (!is_private(dstip)) ipport=dst
@@ -148,8 +150,8 @@ printf "%s\n" "$REPORT" \
     }
 
     END {
-        for (s in sigcount)
-            print sigcount[s], s >> "'"$SIGS"'"
+        for (sig in sigcount)
+            print sigcount[sig], sig >> "'"$SIGS"'"
 
         for (i in cnt)
             print i "|" cnt[i] "|" first[i] "|" last[i] >> "'"$DST"'"
