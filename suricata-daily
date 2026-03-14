@@ -124,6 +124,11 @@ printf "%s\n" "$REPORT" \
         split(t[1], d, "/")
         ts = d[3] "-" d[1] "-" d[2] " " substr(t[2],1,5)
 
+        if (NF < 3) {
+            print $0 ann >> "'"$ANNOTATED"'"
+            next
+        }
+
         src=$(NF-2)
         dst=$NF
 
