@@ -29,7 +29,7 @@ fi
 FAST_CONTENT=""
 if [[ -s "$FAST_LOG" ]]; then
     FAST_CONTENT=$(<"$FAST_LOG")
-    : > "$FAST_LOG"   # truncate immediately to avoid race window
+    : > "$FAST_LOG"
     printf "%s\n" "$FAST_CONTENT" >> "$FAST_LOG.old"
 fi
 
@@ -61,7 +61,6 @@ done > "$TMPMAP"
 
 # -----------------------------
 # Annotate + signatures + external summary
-# Single mawk pass
 # -----------------------------
 ANNOTATED=$(mktemp)
 SIGS=$(mktemp)
@@ -70,7 +69,6 @@ DST=$(mktemp)
 printf "%s\n" "$REPORT" \
 | mawk -v map="$TMPMAP" '
     BEGIN {
-        # Load IP→domain map
         while ((getline < map) > 0) {
             ip=$1; dom=$2
             ipdom[ip]=dom
@@ -93,27 +91,9 @@ printf "%s\n" "$REPORT" \
             line = substr(line, RSTART+RLENGTH)
         }
 
-        # Full IPv6 (8 groups)
+        # Full IPv6 (8 groups only)
         line=$0
         while (match(line, /[0-9A-Fa-f]{4}(:[0-9A-Fa-f]{4}){7}/)) {
-            ip = substr(line, RSTART, RLENGTH)
-            sub(/%.*/, "", ip)
-            ips = ips ip " "
-            line = substr(line, RSTART + RLENGTH)
-        }
-
-        # IPv6 with embedded IPv4
-        line=$0
-        while (match(line, /[0-9A-Fa-f]{4}(:[0-9A-Fa-f]{4}){5}(:[0-9]{1,3}\.){3}[0-9]{1,3}/)) {
-            ip = substr(line, RSTART, RLENGTH)
-            sub(/%.*/, "", ip)
-            ips = ips ip " "
-            line = substr(line, RSTART + RLENGTH)
-        }
-
-        # IPv4-mapped IPv6
-        line=$0
-        while (match(line, /::ffff:([0-9]{1,3}\.){3}[0-9]{1,3}/)) {
             ip = substr(line, RSTART, RLENGTH)
             sub(/%.*/, "", ip)
             ips = ips ip " "
