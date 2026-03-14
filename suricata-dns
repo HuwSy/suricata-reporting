@@ -10,7 +10,7 @@ DAEMON=0
 [ "$1" = "-d" ] && DAEMON=1
 
 GRACE=60
-RETENTION=$((30 * 24 * 3600))
+RETENTION=$((7 * 24 * 3600))
 
 start_restart() {
     if [ "$1" = "1" ]; then
@@ -36,7 +36,7 @@ if [ ! -s "$RULE" ]; then
 fi
 
 # cache if possible
-vmtouch -t "$DB" "$DNS_LOG" || true
+vmtouch -t "$DB" "$DNS_LOG" "$RULE" "$OUT" || true
 
 start_restart $needs_start
 
@@ -159,9 +159,11 @@ build_out_and_rules() {
 
 process_dns_log_once() {
     # safe rotation: copy + truncate
+    DNS_CONTENT=""
     if [ -s "$DNS_LOG" ]; then
-        cp "$DNS_LOG" "$DNS_LOG.o" 2>/dev/null || true
+        DNS_CONTENT=$(<"$DNS_LOG")
         : > "$DNS_LOG"
+        printf "%s\n" "$DNS_CONTENT" >> "$DNS_LOG.old"
     else
         return
     fi
@@ -260,8 +262,7 @@ process_dns_log_once() {
 
         key="${ip}|${host}"
         DB_MAP["$key"]="${host}|${flag}|${ip}|${start}|${expiry}|${expired}"
-    done < "$DNS_LOG.o"
-    cat "$DNS_LOG.o" >> "$DNS_LOG.old"
+    done <<< "$DNS_CONTENT"
 }
 
 main_loop() {
