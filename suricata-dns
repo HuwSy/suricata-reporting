@@ -9,8 +9,6 @@ HOSTS="/var/lib/suricata-allowed-hosts.yaml"
 
 # -d to daemonise
 # all other args will be turned into hosts variables and use docker ip where found
-ARGS="$@"
-DAEMON=0
 
 # overrun ttl by, and retain dns log in db for
 GRACE=60
@@ -19,6 +17,8 @@ RETENTION=$((7 * 24 * 3600))
 # in-memory DB: key = "IP|HOST", value = "HOST|FLAG|IP|START|EXPIRY|EXPIRED"
 declare -A DB_MAP
 declare -a ALLOWED
+declare -a CONTAINERS
+DAEMON=0
 
 # ensure file and cache if possible
 touch "$DB"
@@ -38,13 +38,15 @@ start_restart() {
 
 # Ensure minimal variables and rules for suricata startup without errors
 MINIMAL=$'%YAML 1.1\n---\nHOME_NET: "[127.0.0.1/16]"\nKNOWN_NET: "[127.0.0.1/16]"\nSRV_IP: "[127.0.0.1]"\nHOST_IP: "[127.0.0.1]"\n'
-for arg in "$ARGS"; do
+
+for arg in "$@"; do
     if [ "$arg" = "-d" ]; then
         DAEMON=1
     else
         safe_name=$(printf "%s" "$arg" | tr -cd 'A-Za-z0-9_')
         MINIMAL+=$safe_name
         MINIMAL+=$': "[127.0.0.1]"\n'
+        CONTAINERS+=("$arg")
     fi
 done
 
@@ -119,7 +121,7 @@ less_regular_jobs() {
         | sed 's/ /,/g; s/^,//; s/,$//; s/,,/,/g'
     )]\""$'\n'
 
-    for cname in "$ARGS"; do
+    for cname in "${CONTAINERS[@]}"; do
       # skip for -d daemonise
       [ "$cname" = "-d" ] && continue
 
