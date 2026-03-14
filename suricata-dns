@@ -26,7 +26,9 @@ vmtouch -t "$DB" "$DNS_LOG" "$RULE" "$HOSTS" || true
 
 # start restart suricata
 start_restart() {
+    printf "[DEBUG] %s\n" "Restarting suricata" >&2
     if ! suricata -c /etc/suricata/suricata*.yaml -T >/dev/null 2>&1; then
+        printf "[DEBUG] %s\n" "Invalid file to restart" >&2
         return
     fi
     if ! suricatasc -c reload-rules >/dev/null 2>&1; then
@@ -56,8 +58,10 @@ if [ ! -s "$RULE" ]; then
 fi
 
 less_regular_jobs() {
+    printf "[DEBUG] %s\n" "Loading allowed" >&2
     mapfile -t ALLOWED < "$DOMAINS"
 
+    printf "[DEBUG] %s\n" "Collecting variables" >&2
     HOST_IPv4=$(
         ip -4 -o addr show scope global \
         | grep -vE 'docker0|br-|veth' \
@@ -157,6 +161,7 @@ is_allowed() {
 }
 
 load_db() {
+    printf "[DEBUG] %s\n" "Load DB" >&2
     local now cutoff host flag ip start expiry expired key
     now=$(date +%s)
     cutoff=$((now - RETENTION))
@@ -172,6 +177,7 @@ load_db() {
 }
 
 write_db() {
+    printf "[DEBUG] %s\n" "Write DB" >&2
     local now cutoff key val host flag ip start expiry expired
     now=$(date +%s)
     cutoff=$((now - RETENTION))
@@ -195,6 +201,7 @@ write_db() {
 }
 
 build_out_rules() {
+    printf "[DEBUG] %s\n" "Build rules" >&2
     local now key val host flag ip start expiry expired
     now=$(date +%s)
     local ips_buf=""
@@ -242,6 +249,7 @@ build_out_rules() {
 }
 
 process_dns_log() {
+    printf "[DEBUG] %s\n" "Collecting DNS" >&2
     # safe rotation: copy + truncate
     DNS_CONTENT=""
     if [ -s "$DNS_LOG" ]; then
@@ -348,15 +356,17 @@ process_dns_log() {
 }
 
 main_loop() {
+    printf "[DEBUG] %s\n" "Startup" >&2
     load_db
     local count=0
     while true; do
         if (( count == 0 )); then
-           less_regular_jobs
+            less_regular_jobs
         fi
         process_dns_log
         build_out_rules
         if [ "$DAEMON" = "0" ]; then
+            printf "[DEBUG] %s\n" "Not daemon, ending" >&2
             break
         fi
         if (( count >= 600 )); then
