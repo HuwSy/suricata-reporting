@@ -109,15 +109,7 @@ printf "%s\n" "$REPORT" \
         }
 
         # Signature extraction
-        if (match($0, /
-
-\[\*\*\]
-
-.*
-
-\[\*\*\]
-
-/)) {
+        if (match($0, /\[\*\*\].*\[\*\*\]/)) {
             sig=substr($0, RSTART, RLENGTH)
             sigcount[sig]++
         }
