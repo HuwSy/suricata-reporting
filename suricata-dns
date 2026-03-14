@@ -1,47 +1,150 @@
 #!/bin/bash
 
-DNS_LOG="/var/log/suricata/dns.log"
+# files
 DOMAINS="/etc/suricata/allowed_domains.list"
+DNS_LOG="/var/log/suricata/dns.log"
 DB="/var/lib/suricata-allowed-dns.db"
-OUT="/var/lib/suricata-allowed-ips.list"
 RULE="/var/lib/suricata-allowed-ips.rules"
+HOSTS="/var/lib/suricata-allowed-hosts.yaml"
 
+# -d to daemonise
+# all other args will be turned into hosts variables and use docker ip where found
+ARGS="$@"
 DAEMON=0
-[ "$1" = "-d" ] && DAEMON=1
 
+# overrun ttl by, and retain dns log in db for
 GRACE=60
 RETENTION=$((7 * 24 * 3600))
 
+# in-memory DB: key = "IP|HOST", value = "HOST|FLAG|IP|START|EXPIRY|EXPIRED"
+declare -A DB_MAP
+declare -A ALLOWED
+
+# ensure file and cache if possible
+touch "$DB"
+vmtouch -t "$DB" "$DNS_LOG" "$RULE" "$HOSTS" || true
+
+# start restart suricata
 start_restart() {
-    if [ "$1" = "1" ]; then
-        if ! suricata -c /etc/suricata/suricata*.yaml -T >/dev/null 2>&1; then
-            return
-        fi
-        if ! suricatasc -c reload-rules >/dev/null 2>&1; then
-            systemctl restart suricata
-        fi
+    if ! suricata -c /etc/suricata/suricata*.yaml -T >/dev/null 2>&1; then
+        return
+    fi
+    if ! suricatasc -c reload-rules >/dev/null 2>&1; then
+        systemctl restart suricata
     fi
 }
 
-touch "$DB"
+# Ensure minimal variables and rules for suricata startup without errors
+MINIMAL=$'%YAML 1.1\n---\nHOME_NET: "[127.0.0.1/16]"\nKNOWN_NET: "[127.0.0.1/16]"\nSRV_IP: "[127.0.0.1]"\nHOST_IP: "[127.0.0.1]"\n'
+for arg in "$ARGS"; do
+    if [ "$arg" = "-d" ]; then
+        DAEMON=1
+    else
+        safe_name=$(printf "%s" "$arg" | tr -cd 'A-Za-z0-9_')
+        MINIMAL+=$safe_name
+        MINIMAL+=$': "[127.0.0.1]"\n'
+    fi
+done
 
-needs_start=0
-if [ ! -s "$OUT" ]; then
-    echo "127.0.0.1" > "$OUT"
-    needs_start=1
+if [ ! -s "$HOSTS" ]; then
+    printf "%s" "$MINIMAL" > "$HOSTS"
+    start_restart
 fi
 if [ ! -s "$RULE" ]; then
     echo "pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)" > "$RULE"
-    needs_start=1
+    start_restart
 fi
 
-# cache if possible
-vmtouch -t "$DB" "$DNS_LOG" "$RULE" "$OUT" || true
+less_regular_jobs() {
+    mapfile -t ALLOWED < "$DOMAINS"
 
-start_restart $needs_start
+    HOST_IPv4=$(
+        ip -4 -o addr show scope global \
+        | grep -vE 'docker0|br-|veth' \
+        | awk '/inet / {print $4}' \
+        | cut -d/ -f1
+    )
+    
+    HOST_IPv6=$(
+        ip -6 -o addr show scope global \
+        | grep -vE 'docker0|br-|veth' \
+        | awk '/inet6 / {print $4}' \
+        | cut -d/ -f1
+    )
 
-# --- load allowed domains once ---
-mapfile -t ALLOWED < "$DOMAINS"
+    [ -z "$HOST_IPv4" ] && HOST_IPv4="127.0.0.1"
+    
+    HOME_NETS4=$(ip -o -f inet addr show scope global \
+        | grep -vE 'docker0|br-|veth' \
+        | awk '{print $4}')
+    
+    HOME_NETS6=$(ip -o -f inet6 addr show scope global \
+        | grep -vE 'docker0|br-|veth' \
+        | awk '{print $4}')
+    
+    [ -z "$HOME_NETS4" ] && HOME_NETS4="127.0.0.1/16"
+
+    DOCKER_NETS=$(docker network inspect $(docker network ls -q) | awk -F'"' '/"Subnet"/ {print $4}')
+
+    [ -z "$DOCKER_NETS" ] && DOCKER_NETS="127.0.0.1/16"
+
+    local variables
+
+    : > "$HOSTS"
+    variables=$(printf "%s\n---\n" "%YAML 1.1")
+    
+    # HOME_NET
+    variables+=$(printf "HOME_NET: \"[%s]\"\n" "$(
+      echo $HOME_NETS4" "$HOME_NETS6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+    )")
+    
+    # KNOWN_NET
+    variables+=$(printf "KNOWN_NET: \"[%s]\"\n" "$(
+      echo $HOME_NETS4" "$HOME_NETS6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+    )")
+    
+    # SRV_IP
+    variables+=$(printf "SRV_IP: \"[%s]\"\n" "$(
+      echo $HOST_IPv4" "$HOST_IPv6 | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+    )")
+    
+    # HOST_IP
+    variables+=$(printf "HOST_IP: \"[%s]\"\n" "$(
+      echo $HOST_IPv4" "$HOST_IPv6" "$DOCKER_NETS | sed 's/ /,/g' | sed 's/^,//' | sed 's/,$//' | sed 's/,,/,/g'
+    )")
+    
+    for cname in "$ARGS"; do
+      # skip for -d daemonise
+      [ "$cname" = "-d" ] && continue
+
+      # Sanitize: keep only A–Z, a–z, 0–9, _
+      safe_name=$(printf "%s" "$cname" | tr -cd 'A-Za-z0-9_')
+      [ -z "$safe_name" ] && continue
+    
+      # Find matching container (running or stopped)
+      real_container=$(docker ps -a --format '{{.Names}}' | grep -Fx "$cname")
+    
+      if [ -n "$real_container" ]; then
+        # Extract first non-empty IP from any network
+        cip=$(docker inspect "$real_container" | awk -F'"' '/"IPAddress"/ { if ($4 != "") { print $4; exit } }')
+    
+        if [ -n "$cip" ]; then
+          variables+=$(printf "%s: \"[%s]\"\n" "$safe_name" "$cip")
+          continue
+        fi
+      fi
+    
+      # Fallback if container missing or no IP
+      variables+=$(printf "%s: \"[127.0.0.1]\"\n" "$safe_name")
+    done
+
+    local current_variables=""
+    [ -f "$HOSTS" ] && current_variables=$(cat "$HOSTS")
+    if [[ "$variables" != "$current_variables" ]]; then
+        printf "%s\n" "$variables" > "$HOSTS"
+        start_restart
+    fi
+}
 
 is_allowed() {
     local host="$1"
@@ -52,9 +155,6 @@ is_allowed() {
     done
     return 1
 }
-
-# in-memory DB: key = "IP|HOST", value = "HOST|FLAG|IP|START|EXPIRY|EXPIRED"
-declare -A DB_MAP
 
 load_db() {
     local now cutoff host flag ip start expiry expired key
@@ -94,7 +194,7 @@ write_db() {
     fi
 }
 
-build_out_and_rules() {
+build_out_rules() {
     local now key val host flag ip start expiry expired
     now=$(date +%s)
     local ips_buf=""
@@ -116,48 +216,32 @@ build_out_and_rules() {
 
         ips_buf+="${ip}\n"
 
-        rules_buf+="pass ip any any -> $ip 443 (msg:\"Allowed 443 via DNS to $host\"; sid:$sid; rev:1;)\n"
+        rules_buf+="pass tcp any any -> $ip 443 (msg:\"Allowed 443 via DNS to $host\"; sid:$sid; rev:1;)\n"
         ((sid++))
-        rules_buf+="pass ip $ip 443 -> any any (msg:\"Allowed 443 via DNS to $host (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        rules_buf+="pass tcp $ip 443 -> any any (msg:\"Allowed 443 via DNS to $host (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
         ((sid++))
-        rules_buf+="pass ip any any -> $ip 80 (msg:\"Allowed 80 via DNS to $host\"; sid:$sid; rev:1;)\n"
+        rules_buf+="pass tcp any any -> $ip 80 (msg:\"Allowed 80 via DNS to $host\"; sid:$sid; rev:1;)\n"
         ((sid++))
-        rules_buf+="pass ip $ip 80 -> any any (msg:\"Allowed 80 via DNS to $host (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
+        rules_buf+="pass tcp $ip 80 -> any any (msg:\"Allowed 80 via DNS to $host (established)\"; flow:from_server,established; sid:$sid; rev:1;)\n"
         ((sid++))
     done
 
-    local new_out new_rule
-    if [ -n "$ips_buf" ]; then
-        new_out=$(printf "%b" "$ips_buf" | sed '/^$/d' | sort -u)
-    else
-        new_out="127.0.0.1"
-    fi
-
+    local new_rule
     if [ -n "$rules_buf" ]; then
         new_rule=$(printf "%b" "$rules_buf" | sed '/^$/d' | sort)
     else
         new_rule="pass ip 127.0.0.1 any -> 127.0.0.1 any (msg:\"Pending dns query\"; sid:9990000; rev:1;)"
     fi
 
-    local need_reload=0
-    local current_out="" current_rule=""
-
-    [ -f "$OUT" ] && current_out=$(cat "$OUT")
-    if [[ "$new_out" != "$current_out" ]]; then
-        printf "%s\n" "$new_out" > "$OUT"
-        need_reload=1
-    fi
-
+    local current_rule=""
     [ -f "$RULE" ] && current_rule=$(cat "$RULE")
     if [[ "$new_rule" != "$current_rule" ]]; then
         printf "%s\n" "$new_rule" > "$RULE"
-        need_reload=1
+        start_restart
     fi
-
-    start_restart $need_reload
 }
 
-process_dns_log_once() {
+process_dns_log() {
     # safe rotation: copy + truncate
     DNS_CONTENT=""
     if [ -s "$DNS_LOG" ]; then
@@ -269,8 +353,11 @@ main_loop() {
     load_db
     local count=0
     while true; do
-        process_dns_log_once
-        build_out_and_rules
+        if (( count = 0 )); then
+           less_regular_jobs
+        fi
+        process_dns_log
+        build_out_rules
         if [ "$DAEMON" = "0" ]; then
             break
         fi
