@@ -93,33 +93,31 @@ printf "%s\n" "$REPORT" \
             line = substr(line, RSTART+RLENGTH)
         }
 
-        # Reset line for IPv6 extraction
-        line=$0
-
         # Full IPv6 (8 groups)
-        while (match(line, /([0-9A-Fa-f]{4}:){7}[0-9A-Fa-f]{4}(%[A-Za-z0-9._-]+)?/)) {
-            ip=substr(line, RSTART, RLENGTH)
+        line=$0
+        while (match(line, /[0-9A-Fa-f]{4}(:[0-9A-Fa-f]{4}){7}/)) {
+            ip = substr(line, RSTART, RLENGTH)
             sub(/%.*/, "", ip)
             ips = ips ip " "
-            line = substr(line, RSTART+RLENGTH)
+            line = substr(line, RSTART + RLENGTH)
         }
 
         # IPv6 with embedded IPv4
         line=$0
-        while (match(line, /([0-9A-Fa-f]{4}:){6}([0-9]{1,3}\.){3}[0-9]{1,3}(%[A-Za-z0-9._-]+)?/)) {
-            ip=substr(line, RSTART, RLENGTH)
+        while (match(line, /[0-9A-Fa-f]{4}(:[0-9A-Fa-f]{4}){5}(:[0-9]{1,3}\.){3}[0-9]{1,3}/)) {
+            ip = substr(line, RSTART, RLENGTH)
             sub(/%.*/, "", ip)
             ips = ips ip " "
-            line = substr(line, RSTART+RLENGTH)
+            line = substr(line, RSTART + RLENGTH)
         }
 
         # IPv4-mapped IPv6
         line=$0
-        while (match(line, /::ffff:([0-9]{1,3}\.){3}[0-9]{1,3}(%[A-Za-z0-9._-]+)?/)) {
-            ip=substr(line, RSTART, RLENGTH)
+        while (match(line, /::ffff:([0-9]{1,3}\.){3}[0-9]{1,3}/)) {
+            ip = substr(line, RSTART, RLENGTH)
             sub(/%.*/, "", ip)
             ips = ips ip " "
-            line = substr(line, RSTART+RLENGTH)
+            line = substr(line, RSTART + RLENGTH)
         }
 
         # Annotation
@@ -200,7 +198,7 @@ FAST_IPS=$(mawk '{
         print substr($0, RSTART, RLENGTH)
         $0 = substr($0, RSTART+RLENGTH)
     }
-    while (match($0, /([0-9A-Fa-f]{4}:){7}[0-9A-Fa-f]{4}/)) {
+    while (match($0, /[0-9A-Fa-f]{4}(:[0-9A-Fa-f]{4}){7}/)) {
         print substr($0, RSTART, RLENGTH)
         $0 = substr($0, RSTART+RLENGTH)
     }
