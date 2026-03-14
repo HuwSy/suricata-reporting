@@ -31,6 +31,8 @@ if [[ -s "$FAST_LOG" ]]; then
     FAST_CONTENT=$(<"$FAST_LOG")
     : > "$FAST_LOG"
     printf "%s\n" "$FAST_CONTENT" >> "$FAST_LOG.old"
+else
+    exit 1
 fi
 
 # -----------------------------
