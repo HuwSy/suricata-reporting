@@ -384,4 +384,13 @@ main_loop() {
     done
 }
 
-main_loop
+main_loop &
+LOOPPID=$!
+if [ "$DAEMON" = "1" ]; then
+    SCRIPT="$(readlink -f "$0")"
+    ARGS=("$@")
+    inotifywait -q -e modify "$SCRIPT"
+    kill "$LOOPPID"
+    wait "$LOOPPID" 2>/dev/null
+    exec "$SCRIPT" "${ARGS[@]}"
+fi
