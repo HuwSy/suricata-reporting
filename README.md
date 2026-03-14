@@ -20,20 +20,13 @@ The rules also build ips to reduce logging
 /etc/suricata/suricata.yaml
 ```
 rule-files:
- - /var/run/suricata-allowed-ips.rules
-```
-OR
-```
-vars:
-  address-groups:
-    allowed_ips: "/var/run/suricata-allowed-ips.list"
-```
-/etc/suricata/rules/local.rules
-```
-pass ip any any -> $allowed_ips any ( msg:"Allowed domain via DNS resolution"; sid:9900000; rev:1; )
+ - /var/lib/suricata-allowed-ips.rules
 ```
 
-cron
+To auto generate variables for host, docker and containers etc
 ```
-* * * * * /usr/sbin/suricata-dns
+vars:
+  address-groups: !include /var/lib/suricata-variables-docker.yaml
 ```
+
+Run one of or on schedule via ./suricata-dns or to daemonise and update every approx 6 seconds (dependent on processing duration) via ./suricata-dns -d
