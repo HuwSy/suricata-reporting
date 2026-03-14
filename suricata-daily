@@ -4,231 +4,226 @@ FAST_LOG="/var/log/suricata/fast.log"
 HOST_IP=$(hostname -I | awk '{print $1}')
 DB="/var/lib/suricata-allowed-dns.db"
 
-declare -A NON_ALLOWED_MAP
+declare -A IP_TO_DOMAIN
 ALLOWED_IPS=""
 
 # -----------------------------
-# IP validators
+# Load DNS DB
 # -----------------------------
-is_ipv4() {
-    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
-}
-
-is_ipv6() {
-    [[ "$1" =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ || "$1" =~ :: ]]
-}
-
-# -----------------------------
-# Add mapping from DB
-# -----------------------------
-add_mapping() {
-    local domain="$1"
-    local ip="$2"
-    local allowed="$3"
-
-    [[ -z "$domain" || -z "$ip" ]] && return
-    [[ "$ip" == "$HOST_IP" ]] && return
-
-    if [[ "$allowed" = "1" ]]; then
-        ALLOWED_IPS+="$ip"$'\n'
-    else
-        NON_ALLOWED_MAP["$domain"]+="$ip "
-    fi
-}
-
-# -----------------------------
-# 1) Load DNS info from DB
-#    DB format: HOST|FLAG|IP|START|EXPIRY|EXPIRED
-# -----------------------------
-now=$(date +%s)
-
 if [[ -s "$DB" ]]; then
     while IFS='|' read -r host flag ip start expiry expired; do
-        [[ -n "$host" ]] || continue
+        [[ -z "$host" ]] && continue
+        [[ "$ip" == "$HOST_IP" ]] && continue
 
-        if ! is_ipv4 "$ip" && ! is_ipv6 "$ip"; then
-            continue
+        if [[ "$flag" = "1" ]]; then
+            ALLOWED_IPS+="$ip"$'\n'
+        else
+            IP_TO_DOMAIN["$ip"]="$host"
         fi
-
-        add_mapping "$host" "$ip" "$flag"
     done < "$DB"
 fi
 
 # -----------------------------
-# 2) Read fast.log into memory
+# Read + truncate fast.log safely
 # -----------------------------
 FAST_CONTENT=""
 if [[ -s "$FAST_LOG" ]]; then
-    cp "$FAST_LOG" "$FAST_LOG.o"
-    : > "$FAST_LOG"
-    FAST_CONTENT=$(cat "$FAST_LOG.o")
-    cat "$FAST_LOG.o" >> "$FAST_LOG.old"
+    FAST_CONTENT=$(<"$FAST_LOG")
+    : > "$FAST_LOG"   # truncate immediately to avoid race window
+    printf "%s\n" "$FAST_CONTENT" >> "$FAST_LOG.old"
 fi
 
 # -----------------------------
-# 3) Filter out allowed IPs (in-memory)
+# Filter allowed IPs
 # -----------------------------
-DNS_IPS=$(printf "%s" "$ALLOWED_IPS" | sed '/^$/d' | sort -u || true)
+DNS_IPS=$(printf "%s" "$ALLOWED_IPS" | mawk 'NF' | sort -u)
 
-if [[ -n "$DNS_IPS" ]]; then
-    REPORT=$(printf "%s\n" "$FAST_CONTENT" | grep -vFf <(printf "%s" "$DNS_IPS") || true)
-else
-    REPORT="$FAST_CONTENT"
-fi
-
-# -----------------------------
-# 4) Annotate REPORT with domain info
-# -----------------------------
-ANNOTATED_REPORT=""
-
-while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-
-    ips_in_line=$(echo "$line" \
-        | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|::[0-9a-fA-F]{1,4}|[0-9a-fA-F]{1,4}::' \
-        | sort -u || true)
-
-    annotation=""
-
-    for ip in $ips_in_line; do
-        for domain in "${!NON_ALLOWED_MAP[@]}"; do
-            if [[ " ${NON_ALLOWED_MAP[$domain]} " == *" $ip "* ]]; then
-                annotation+=" [DOMAIN:$domain]"
-            fi
-        done
-    done
-
-    ANNOTATED_REPORT+="$line$annotation"$'\n'
-done <<< "$REPORT"
+REPORT=$(printf "%s\n" "$FAST_CONTENT" \
+| mawk -v allowed="$DNS_IPS" '
+    BEGIN {
+        n = split(allowed, a, "\n")
+        for (i=1;i<=n;i++) allow[a[i]]=1
+    }
+    {
+        skip=0
+        for (ip in allow) if (ip != "" && index($0, ip)) skip=1
+        if (!skip) print
+    }
+')
 
 # -----------------------------
-# 5) Build DOMAINS list
+# Build IP→domain map for mawk
 # -----------------------------
-FAST_IPS=$(printf "%s\n" "$REPORT" \
-    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|::[0-9a-fA-F]{1,4}|[0-9a-fA-F]{1,4}::' \
-    | sort -u || true)
+TMPMAP=$(mktemp)
+for ip in "${!IP_TO_DOMAIN[@]}"; do
+    printf "%s %s\n" "$ip" "${IP_TO_DOMAIN[$ip]}"
+done > "$TMPMAP"
+
+# -----------------------------
+# Annotate + signatures + external summary
+# Single mawk pass
+# -----------------------------
+ANNOTATED=$(mktemp)
+SIGS=$(mktemp)
+DST=$(mktemp)
+
+printf "%s\n" "$REPORT" \
+| mawk -v map="$TMPMAP" '
+    BEGIN {
+        # Load IP→domain map
+        while ((getline < map) > 0) {
+            ip=$1; dom=$2
+            ipdom[ip]=dom
+        }
+        close(map)
+    }
+
+    function is_private(ip) {
+        return (ip ~ /^10\./ || ip ~ /^192\.168\./ || ip ~ /^172\.(1[6-9]|2[0-9]|3[0-1])\./)
+    }
+
+    {
+        line=$0
+        ips=""
+
+        # IPv4
+        while (match(line, /([0-9]{1,3}\.){3}[0-9]{1,3}/)) {
+            ip=substr(line, RSTART, RLENGTH)
+            ips = ips ip " "
+            line = substr(line, RSTART+RLENGTH)
+        }
+
+        # Reset line for IPv6 extraction
+        line=$0
+
+        # Full IPv6 (8 groups)
+        while (match(line, /([0-9A-Fa-f]{4}:){7}[0-9A-Fa-f]{4}(%[A-Za-z0-9._-]+)?/)) {
+            ip=substr(line, RSTART, RLENGTH)
+            sub(/%.*/, "", ip)
+            ips = ips ip " "
+            line = substr(line, RSTART+RLENGTH)
+        }
+
+        # IPv6 with embedded IPv4
+        line=$0
+        while (match(line, /([0-9A-Fa-f]{4}:){6}([0-9]{1,3}\.){3}[0-9]{1,3}(%[A-Za-z0-9._-]+)?/)) {
+            ip=substr(line, RSTART, RLENGTH)
+            sub(/%.*/, "", ip)
+            ips = ips ip " "
+            line = substr(line, RSTART+RLENGTH)
+        }
+
+        # IPv4-mapped IPv6
+        line=$0
+        while (match(line, /::ffff:([0-9]{1,3}\.){3}[0-9]{1,3}(%[A-Za-z0-9._-]+)?/)) {
+            ip=substr(line, RSTART, RLENGTH)
+            sub(/%.*/, "", ip)
+            ips = ips ip " "
+            line = substr(line, RSTART+RLENGTH)
+        }
+
+        # Annotation
+        ann=""
+        split(ips, arr)
+        for (i in arr) {
+            ip=arr[i]
+            if (ip in ipdom) ann = ann " [DOMAIN:" ipdom[ip] "]"
+        }
+
+        # Signature extraction
+        if (match($0, /
+
+\[\*\*\]
+
+.*
+
+\[\*\*\]
+
+/)) {
+            sig=substr($0, RSTART, RLENGTH)
+            sigcount[sig]++
+        }
+
+        # External summary
+        rawts=$1
+        split(rawts, t, "-")
+        split(t[1], d, "/")
+        ts = d[3] "-" d[1] "-" d[2] " " substr(t[2],1,5)
+
+        src=$(NF-2)
+        dst=$NF
+        split(src, s, ":")
+        split(dst, d2, ":")
+
+        srcip=s[1]; dstip=d2[1]
+
+        if (!is_private(srcip)) ipport=src
+        else if (!is_private(dstip)) ipport=dst
+        else ipport=""
+
+        if (ipport != "") {
+            cnt[ipport]++
+            if (!(ipport in first)) first[ipport]=ts
+            last[ipport]=ts
+        }
+
+        print $0 ann >> "'"$ANNOTATED"'"
+    }
+
+    END {
+        for (s in sigcount)
+            print sigcount[s], s >> "'"$SIGS"'"
+
+        for (i in cnt)
+            print i "|" cnt[i] "|" first[i] "|" last[i] >> "'"$DST"'"
+    }
+'
+
+# -----------------------------
+# Signature summary
+# -----------------------------
+SIG_SUMMARY=$(sort -nr "$SIGS" | mawk '{print $0}')
+
+# -----------------------------
+# External summary
+# -----------------------------
+DST_SUMMARY=$(sort -t"|" -k3,3 "$DST" \
+| mawk -F"|" '{
+    printf "%-22s %-8s %-20s %-20s\n", $1, $2, $3, $4
+}')
+
+# -----------------------------
+# Domain list
+# -----------------------------
+FAST_IPS=$(mawk '{
+    while (match($0, /([0-9]{1,3}\.){3}[0-9]{1,3}/)) {
+        print substr($0, RSTART, RLENGTH)
+        $0 = substr($0, RSTART+RLENGTH)
+    }
+    while (match($0, /([0-9A-Fa-f]{4}:){7}[0-9A-Fa-f]{4}/)) {
+        print substr($0, RSTART, RLENGTH)
+        $0 = substr($0, RSTART+RLENGTH)
+    }
+}' "$ANNOTATED" | sort -u)
 
 DOMAINS=""
-
-for domain in "${!NON_ALLOWED_MAP[@]}"; do
-    domain_ips=$(printf "%s" "${NON_ALLOWED_MAP[$domain]}" \
-        | tr ' ' '\n' | sed '/^$/d' | sort -u || true)
-
-    match_found=false
-    for ip in $domain_ips; do
-        if printf "%s\n" "$FAST_IPS" | grep -Fxq "$ip"; then
-            match_found=true
-            break
-        fi
-    done
-
-    if $match_found; then
-        DOMAINS+="Domain: $domain
-Resolved/seen IPs: ${NON_ALLOWED_MAP[$domain]}
+for ip in "${!IP_TO_DOMAIN[@]}"; do
+    if printf "%s\n" "$FAST_IPS" | grep -Fxq "$ip"; then
+        dom="${IP_TO_DOMAIN[$ip]}"
+        DOMAINS+="Domain: $dom
+Resolved/seen IPs: $ip
 
 "
     fi
 done
 
 # -----------------------------
-# 6) Build counted signature summary
-# -----------------------------
-SIG_SUMMARY=$(
-    printf "%s\n" "$ANNOTATED_REPORT" \
-    | awk '
-        {
-            s = index($0, "[**]")
-            if (s == 0) next
-            e = index(substr($0, s + 4), "[**]")
-            if (e == 0) next
-            e = s + 4 + e + 2
-            sig = substr($0, s, e - s + 1)
-            print sig
-        }
-    ' \
-    | sort \
-    | uniq -c \
-    | sed 's/^ *//'
-)
-
-# -----------------------------
-# 7) Build counted destination summary
-# -----------------------------
-DST_SUMMARY="$(
-printf '%s\n' "$ANNOTATED_REPORT" \
-| awk '
-function trim_ts(raw,   a,date,time,d,newdate,t,newtime) {
-    split(raw, a, "-")
-    date = a[1]
-    time = a[2]
-
-    split(date, d, "/")
-    newdate = d[3] "-" d[1] "-" d[2]
-
-    split(time, t, ":")
-    newtime = t[1] ":" t[2]
-
-    return newdate " " newtime
-}
-
-function is_private(ip) {
-    return (ip ~ /^10\./ || ip ~ /^192\.168\./ || ip ~ /^172\.(1[6-9]|2[0-9]|3[0-1])\./)
-}
-
-{
-    rawts = $1
-    ts = trim_ts(rawts)
-
-    # Extract source and destination fields
-    src = $(NF-2)
-    dst = $NF
-
-    split(src, s, ":")
-    split(dst, d, ":")
-
-    srcip = s[1]
-    dstip = d[1]
-
-    # Select the external IP:port regardless of direction
-    if (!is_private(srcip)) {
-        ipport = src
-    } else if (!is_private(dstip)) {
-        ipport = dst
-    } else {
-        next
-    }
-
-    count[ipport]++
-
-    if (!(ipport in first)) {
-        first[ipport] = ts
-    }
-
-    last[ipport] = ts
-}
-
-END {
-    printf "%-22s %-8s %-20s %-20s\n", "External_IP:Port", "Count", "First_Seen", "Last_Seen"
-    printf "%-22s %-8s %-20s %-20s\n", "------------------", "-----", "--------------------", "--------------------"
-
-    for (i in count) {
-        printf "%s|%d|%s|%s\n", i, count[i], first[i], last[i]
-    }
-}' \
-| sort -t"|" -k3,3 \
-| awk -F"|" '
-{
-    printf "%-22s %-8s %-20s %-20s\n", $1, $2, $3, $4
-}'
-)"
-
-# -----------------------------
-# Email/report output
+# Build final email
 # -----------------------------
 EMAIL=""
 
-if [ -n "$DOMAINS" ]; then
-    EMAIL+="
+if [[ -n "$DOMAINS" ]]; then
+EMAIL+="
 ---------------------------------------------------
 Non-Allowed Domains
 ---------------------------------------------------
@@ -236,8 +231,8 @@ $DOMAINS
 "
 fi
 
-if [ -n "$SIG_SUMMARY" ]; then
-    EMAIL+="
+if [[ -n "$SIG_SUMMARY" ]]; then
+EMAIL+="
 ---------------------------------------------------
 Suricata Signatures
 ---------------------------------------------------
@@ -246,8 +241,8 @@ $SIG_SUMMARY
 "
 fi
 
-if [ -n "$DST_SUMMARY" ]; then
-    EMAIL+="
+if [[ -n "$DST_SUMMARY" ]]; then
+EMAIL+="
 ---------------------------------------------------
 External Summary
 ---------------------------------------------------
@@ -256,8 +251,10 @@ $DST_SUMMARY
 "
 fi
 
-if [ -n "$ANNOTATED_REPORT" ]; then
-    EMAIL+="
+ANNOTATED_REPORT=$(<"$ANNOTATED")
+
+if [[ -n "$ANNOTATED_REPORT" ]]; then
+EMAIL+="
 ---------------------------------------------------
 Suricata Report
 ---------------------------------------------------
@@ -267,3 +264,5 @@ $ANNOTATED_REPORT
 fi
 
 echo "$EMAIL"
+
+rm -f "$TMPMAP" "$ANNOTATED" "$SIGS" "$DST"
